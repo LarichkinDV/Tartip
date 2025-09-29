@@ -195,7 +195,7 @@ WRITE Itogo row above first row of group:
 REBUILD outline: group data rows under each Itogo (summary above)
 
 SHOW message: selected items count; groups count
-```text
+text```
 
 ##9. Примеры
 ###9.1 Фильтрация по стадиям
