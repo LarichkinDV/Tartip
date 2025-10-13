@@ -1,5 +1,3 @@
-$path = "C:\pyRevit-master2\pyRevit-master\Extensions\MyCostTool.extension\MyTab.tab\Cost.panel\CalculateCost.pushbutton\script.py"
-@'
 # -*- coding: utf-8 -*-
 import re
 from pyrevit import revit, DB, forms, script
@@ -18,25 +16,43 @@ P_COST_F         = u"ACBD_Ф_СтоимостьЭлемента"
 P_LAB_N          = u"ACBD_Н_ТрудозатратыЭлемента"
 P_LAB_F          = u"ACBD_Ф_ТрудозатратыЭлемента"
 
+def _to_text(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except Exception:
+            try:
+                return value.decode("cp1251")
+            except Exception:
+                return None
+    return str(value)
+
+
 def _num(x):
     if x is None:
         return None
     if isinstance(x, (int, float)):
         return float(x)
-    s = x if isinstance(x, unicode) else unicode(x)
+    s = _to_text(x)
+    if s is None:
+        return None
     s = s.strip()
     if not s:
         return None
-    s = re.sub(ur"[^\d,.\-]", u"", s).replace(u",", u".")
+    s = re.sub(r"[^\d,.\-]", u"", s).replace(u",", u".")
     try:
         return float(s)
-    except:
+    except Exception:
         return None
 
 def _get_param(el, name):
     try:
         return el.LookupParameter(name)
-    except:
+    except Exception:
         return None
 
 def _get_str(el, name):
@@ -45,9 +61,9 @@ def _get_str(el, name):
         return None
     try:
         if p.StorageType == DB.StorageType.String:
-            return p.AsString()
-        return p.AsValueString()
-    except:
+            return _to_text(p.AsString())
+        return _to_text(p.AsValueString())
+    except Exception:
         return None
 
 def _get_double(el, name):
@@ -60,7 +76,7 @@ def _get_double(el, name):
         if p.StorageType == DB.StorageType.String:
             return _num(p.AsString())
         return _num(p.AsValueString())
-    except:
+    except Exception:
         return None
 
 def _set_number(el, name, value):
@@ -75,7 +91,7 @@ def _set_number(el, name, value):
             return p.Set(txt)
         else:
             return False
-    except:
+    except Exception:
         return False
 
 def _qty_by_unit(el, unit_text):
@@ -90,7 +106,7 @@ def _qty_by_unit(el, unit_text):
                 p = el.get_Parameter(bip)
                 if p and p.AsDouble() and p.AsDouble() > 0:
                     return DB.UnitUtils.ConvertFromInternalUnits(p.AsDouble(), DB.UnitTypeId.SquareMeters)
-            except:
+            except Exception:
                 pass
         for n in (u"Площадь", u"Area"):
             v = _get_double(el, n)
@@ -104,7 +120,7 @@ def _qty_by_unit(el, unit_text):
                 p = el.get_Parameter(bip)
                 if p and p.AsDouble() and p.AsDouble() > 0:
                     return DB.UnitUtils.ConvertFromInternalUnits(p.AsDouble(), DB.UnitTypeId.CubicMeters)
-            except:
+            except Exception:
                 pass
         for n in (u"Объем", u"Объём", u"Volume"):
             v = _get_double(el, n)
@@ -116,7 +132,7 @@ def _qty_by_unit(el, unit_text):
             p = el.get_Parameter(DB.BuiltInParameter.CURVE_ELEM_LENGTH)
             if p and p.AsDouble() and p.AsDouble() > 0:
                 return DB.UnitUtils.ConvertFromInternalUnits(p.AsDouble(), DB.UnitTypeId.Meters)
-        except:
+        except Exception:
             pass
         for n in (u"Длина", u"Length"):
             v = _get_double(el, n)
@@ -198,4 +214,3 @@ out.print_md(u"*Пропущено (нет ед. изм.):* **{0}**".format(skip
 out.print_md(u"*Пропущено (нет ставок/прочее):* **{0}**".format(skipped_other))
 forms.alert(u"Готово.\nОбновлено: {0}\nБез ед. изм.: {1}\nБез ставок/прочее: {2}"
             .format(updated, skipped_no_unit, skipped_other))
-'@ | Set-Content -Encoding UTF8 $path
