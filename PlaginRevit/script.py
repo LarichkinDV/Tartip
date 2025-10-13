@@ -2,6 +2,21 @@
 import re
 from pyrevit import revit, DB, forms, script
 
+try:
+    unicode  # type: ignore[name-defined]
+except NameError:  # pragma: no cover - Python 3
+    unicode = str  # type: ignore[assignment]
+
+try:
+    basestring  # type: ignore[name-defined]
+except NameError:  # pragma: no cover - Python 3
+    basestring = (str, bytes)  # type: ignore[assignment]
+
+try:
+    import System  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover - pythonnet not available
+    System = None
+
 doc = revit.doc
 out = script.get_output()
 
@@ -22,14 +37,38 @@ def _to_text(value):
     if isinstance(value, str):
         return value
     if isinstance(value, bytes):
-        try:
-            return value.decode("utf-8")
-        except Exception:
+        for encoding in ("utf-8", "cp1251"):
             try:
-                return value.decode("cp1251")
+                return value.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return value.decode("utf-8", "ignore")
+    dotnet_string = getattr(System, "String", None) if System else None
+    if dotnet_string and isinstance(value, dotnet_string):
+        try:
+            return unicode(value)
+        except Exception:
+            pass
+    if hasattr(value, "ToString"):
+        try:
+            text = value.ToString()
+        except Exception:
+            text = None
+        if text not in (None, ""):
+            try:
+                return unicode(text)
             except Exception:
-                return None
-    return str(value)
+                try:
+                    return str(text)
+                except Exception:
+                    pass
+    try:
+        return unicode(value)
+    except Exception:
+        try:
+            return str(value)
+        except Exception:
+            return None
 
 
 def _num(x):
@@ -37,13 +76,18 @@ def _num(x):
         return None
     if isinstance(x, (int, float)):
         return float(x)
-    s = _to_text(x)
-    if s is None:
+    if isinstance(x, bytes):
+        text = _to_text(x)
+    elif isinstance(x, basestring):  # type: ignore[arg-type]
+        text = unicode(x)
+    else:
+        text = _to_text(x)
+    if text is None:
         return None
-    s = s.strip()
+    s = text.strip()
     if not s:
         return None
-    s = re.sub(r"[^\d,.\-]", u"", s).replace(u",", u".")
+    s = re.sub(u"[^0-9,.-]", u"", s).replace(u",", u".")
     try:
         return float(s)
     except Exception:
@@ -82,6 +126,8 @@ def _get_double(el, name):
 def _set_number(el, name, value):
     p = _get_param(el, name)
     if not p:
+        return False
+    if value is None:
         return False
     try:
         if p.StorageType == DB.StorageType.Double:
