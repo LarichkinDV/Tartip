@@ -259,4 +259,6 @@ summary_message = (
     u"Готово.\nОбновлено: {0}\nБез ед. изм.: {1}\nБез ставок/прочее: {2}"
 ).format(updated, skipped_no_unit, skipped_other)
 
-forms.alert(summary_message)
+forms.alert(
+    summary_message
+)
