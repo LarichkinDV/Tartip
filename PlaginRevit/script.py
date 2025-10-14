@@ -6,7 +6,10 @@ from pyrevit import revit, DB, forms, script
 doc = revit.doc
 out = script.get_output()
 
-P_UNIT = u"ACBD_Н_ЕдиницаИзмерения"
+UNIT_PARAM_NAMES = (
+    u"ACBD_Н_ЕдиницаИзмерения",
+    u"ACBD_ЕдиницаИзмерения",
+)
 P_COST_N_RATE = u"ACBD_Н_ЦенаЗаЕдИзм"
 P_COST_F_RATE = u"ACBD_Ф_ЦенаЗаЕдИзм"
 P_LAB_N_RATE = u"ACBD_Н_ТрудозатратыНаЕдИзм"
@@ -76,6 +79,14 @@ def _get_str(el, name):
         return _to_text(param.AsValueString())
     except Exception:
         return None
+
+
+def _get_first_str(el, names):
+    for name in names:
+        value = _get_str(el, name)
+        if value:
+            return value
+    return None
 
 
 def _get_double(el, name):
@@ -232,7 +243,7 @@ if not forms.alert(
 
 with revit.Transaction(u"ACBD: Пересчёт стоимости/трудозатрат"):
     for element in elements:
-        unit_text = _get_str(element, P_UNIT)
+        unit_text = _get_first_str(element, UNIT_PARAM_NAMES)
         if not unit_text:
             skipped_no_unit += 1
             continue
