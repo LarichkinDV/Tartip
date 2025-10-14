@@ -30,17 +30,35 @@ UNIT_PARAM_NAMES = (
 )
 
 # -------------------- утилиты --------------------
+try:
+    _text_type = unicode  # type: ignore[name-defined]
+except NameError:  # pragma: no cover - python 3
+    _text_type = str
+
+
 def _to_text(v):
-    if v is None: return None
+    if v is None:
+        return None
     try:
-        if isinstance(v, unicode): return v
-    except NameError: pass
-    try: return unicode(v)
-    except:
-        try: return unicode(v.ToString())
-        except:
-            try: return unicode(str(v))
-            except: return None
+        if isinstance(v, _text_type):
+            return _text_type(v)
+    except Exception:
+        pass
+    to_string = getattr(v, "ToString", None)
+    if callable(to_string):
+        try:
+            return _text_type(to_string())
+        except Exception:
+            pass
+    try:
+        return _text_type(v)
+    except Exception:
+        pass
+    try:
+        return _text_type(str(v))
+    except Exception:
+        pass
+    return None
 
 def _num(v):
     if v is None: return None
@@ -388,7 +406,7 @@ def _ensure_overlay_xaml(path):
 
 def _fmt_rub(val):
     try: return (u"{:,.2f} ₽".format(float(val))).replace(u",", u" ").replace(u".", u",")
-    except: return unicode(val)
+    except: return _text_type(val)
 
 def _show_overlay(total_n, total_f):
     sticky = script.get_sticky(); KEY = "ACBD_COST_OVERLAY"
