@@ -252,10 +252,11 @@ out.print_md(u"### Готово")
 out.print_md(u"*Обновлено элементов:* **{0}**".format(updated))
 out.print_md(u"*Пропущено (нет ед. изм.):* **{0}**".format(skipped_no_unit))
 out.print_md(u"*Пропущено (нет ставок/прочее):* **{0}**".format(skipped_other))
-forms.alert(
-    u"Готово.\nОбновлено: {0}\nБез ед. изм.: {1}\nБез ставок/прочее: {2}".format(
-        updated,
-        skipped_no_unit,
-        skipped_other,
-    )
+
+summary_message = u"Готово.\nОбновлено: {0}\nБез ед. изм.: {1}\nБез ставок/прочее: {2}".format(
+    updated,
+    skipped_no_unit,
+    skipped_other,
 )
+
+forms.alert(summary_message)
