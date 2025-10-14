@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
-import re
+import re, os, ctypes
 from pyrevit import revit, DB, forms, script
 from System.Collections.Generic import List
+from System.Windows.Interop import WindowInteropHelper
+from System.Windows.Threading import DispatcherTimer
+from System import TimeSpan
 
 doc = revit.doc
 out = script.get_output()
 
-# ---- Имена целевых параметров ----
+# -------------------- параметры --------------------
 P_COST_N_RATE = u"ACBD_Н_ЦенаЗаЕдИзм"
 P_COST_F_RATE = u"ACBD_Ф_ЦенаЗаЕдИзм"
 P_LAB_N_RATE  = u"ACBD_Н_ТрудозатратыНаЕдИзм"
@@ -17,7 +20,6 @@ P_COST_F = u"ACBD_Ф_СтоимостьЭлемента"
 P_LAB_N  = u"ACBD_Н_ТрудозатратыЭлемента"
 P_LAB_F  = u"ACBD_Ф_ТрудозатратыЭлемента"
 
-# Возможные имена параметра ЕИ
 UNIT_PARAM_NAMES = (
     u"ACBD_Н_ЕдиницаИзмерения",
     u"ACBD_ЕдиницаИзмерения",
@@ -27,13 +29,12 @@ UNIT_PARAM_NAMES = (
     u"Unit",
 )
 
-# ------------------- утилиты текста/чисел -------------------
+# -------------------- утилиты --------------------
 def _to_text(v):
     if v is None: return None
     try:
         if isinstance(v, unicode): return v
-    except NameError:
-        pass
+    except NameError: pass
     try: return unicode(v)
     except:
         try: return unicode(v.ToString())
@@ -49,7 +50,6 @@ def _num(v):
     try: return float(s)
     except: return None
 
-# латинизация похожих кир. букв (Н→H, Ф→F, С→C и т.п.)
 _cyr2lat = {u'Н':u'H',u'н':u'h',u'Ф':u'F',u'ф':u'f',u'С':u'C',u'с':u'c',u'А':u'A',u'а':u'a',u'В':u'B',u'в':u'b',
             u'Е':u'E',u'е':u'e',u'К':u'K',u'к':u'k',u'М':u'M',u'м':u'm',u'О':u'O',u'о':u'o',u'Р':u'P',u'р':u'p',
             u'Т':u'T',u'т':u't',u'Х':u'X',u'х':u'x',u'У':u'Y',u'у':u'y'}
@@ -63,7 +63,6 @@ def _base_norm(name):
     s = s.replace(u"единицаизмерения", u"едизм")
     return s
 
-# ------------------- доступ к параметрам (+fuzzy) -------------------
 def _get_param(holder, name):
     if not holder: return None
     try:
@@ -109,15 +108,15 @@ def _get_rate(el, name):
         if t: v = _get_str(t, name)
     return _num(v)
 
-# ------------------- строительные элементы (вся модель) -------------------
-_ALLOWED_CATS = List[DB.BuiltInCategory]([
+# -------------------- отбор строительных элементов --------------------
+ALLOWED = List[DB.BuiltInCategory]([
     DB.BuiltInCategory.OST_Walls,
     DB.BuiltInCategory.OST_Floors,
     DB.BuiltInCategory.OST_Roofs,
     DB.BuiltInCategory.OST_Ceilings,
     DB.BuiltInCategory.OST_StructuralColumns,
-    DB.BuiltInCategory.OST_Columns,              # архитектурные колонны
-    DB.BuiltInCategory.OST_StructuralFraming,    # балки
+    DB.BuiltInCategory.OST_Columns,
+    DB.BuiltInCategory.OST_StructuralFraming,
     DB.BuiltInCategory.OST_StructuralFoundation,
     DB.BuiltInCategory.OST_Doors,
     DB.BuiltInCategory.OST_Windows,
@@ -125,17 +124,53 @@ _ALLOWED_CATS = List[DB.BuiltInCategory]([
     DB.BuiltInCategory.OST_Railings,
     DB.BuiltInCategory.OST_CurtainWallPanels,
     DB.BuiltInCategory.OST_CurtainWallMullions,
-    DB.BuiltInCategory.OST_GenericModel,         # часто как строительные
+    DB.BuiltInCategory.OST_GenericModel,
 ])
 
-def _building_elements_all():
-    f_cats = DB.ElementMulticategoryFilter(_ALLOWED_CATS)
+def _has_any_acbd(el):
+    names = (P_COST_N_RATE,P_COST_F_RATE,P_LAB_N_RATE,P_LAB_F_RATE,P_COST_N,P_COST_F,P_LAB_N,P_LAB_F)
+    for n in names:
+        if _get_param(el, n): return True
+    t = _get_type(el)
+    if t:
+        for n in names:
+            if _get_param(t, n): return True
+    return False
+
+def _elements_all():
+    f_cats = DB.ElementMulticategoryFilter(ALLOWED)
     col = (DB.FilteredElementCollector(doc)
              .WhereElementIsNotElementType()
              .WherePasses(f_cats))
-    return [el for el in col if not getattr(el, "ViewSpecific", False)]
+    res = []
+    for el in col:
+        if getattr(el, "ViewSpecific", False):  # детализ. элементы и т.п.
+            continue
+        cat = getattr(el, "Category", None)
+        if not cat or cat.CategoryType != DB.CategoryType.Model:
+            continue
+        if not _has_any_acbd(el):
+            continue
+        res.append(el)
+    return res
 
-# ------------------- количество -------------------
+def _elements_visible(view):
+    """Элементы, видимые на активном виде."""
+    f_cats = DB.ElementMulticategoryFilter(ALLOWED)
+    col = (DB.FilteredElementCollector(doc, view.Id)
+             .WhereElementIsNotElementType()
+             .WherePasses(f_cats))
+    res = []
+    for el in col:
+        cat = getattr(el, "Category", None)
+        if not cat or cat.CategoryType != DB.CategoryType.Model:
+            continue
+        if not _has_any_acbd(el):
+            continue
+        res.append(el)
+    return res
+
+# -------------------- количества --------------------
 def _bip(name):
     try: return getattr(DB.BuiltInParameter, name)
     except: return None
@@ -210,7 +245,7 @@ def _get_unit_and_qty(el):
                     return s, q, u"param"
     return _auto_unit_and_qty(el)
 
-# ------------------- запись (учёт «валюты») -------------------
+# -------------------- запись чисел --------------------
 def _is_currency_param(p):
     try:
         dt = p.Definition.GetDataType()
@@ -246,12 +281,10 @@ def _try_set_with_formats(p, value, is_currency):
     return False
 
 def _set_number_any(el, target_name, value):
-    # экземпляр
     p = _get_param(el, target_name)
     if p and not getattr(p, "IsReadOnly", False):
         if _try_set_with_formats(p, value, _is_currency_param(p)):
             return True, "instance"
-    # тип
     t = _get_type(el)
     if t:
         pt = _get_param(t, target_name)
@@ -260,15 +293,14 @@ def _set_number_any(el, target_name, value):
                 return True, "type"
     return False, "missing"
 
-# ------------------- счётчики -------------------
-w_inst = 0
-w_type = 0
+# -------------------- счётчики/итоги --------------------
+w_inst = w_type = 0
 auto_units = 0
-cost_written = 0
-labor_written = 0
+cost_written = labor_written = 0
+total_cost_n = 0.0
+total_cost_f = 0.0
 
 def _apply_value(el, target_name, value, is_cost):
-    """Запись значения + обновление счётчиков (без вложенных функций)."""
     global w_inst, w_type, cost_written, labor_written
     ok, where = _set_number_any(el, target_name, value)
     if ok:
@@ -278,10 +310,8 @@ def _apply_value(el, target_name, value, is_cost):
         else: labor_written += 1
     return ok
 
-# ------------------- расчёт по элементу -------------------
 def _calc_and_set(el):
-    global auto_units
-
+    global auto_units, total_cost_n, total_cost_f
     unit_txt, qty, src = _get_unit_and_qty(el)
     if src != u"param": auto_units += 1
 
@@ -290,24 +320,191 @@ def _calc_and_set(el):
     r_ln = _get_rate(el, P_LAB_N_RATE)
     r_lf = _get_rate(el, P_LAB_F_RATE)
 
-    if r_cn is not None: _apply_value(el, P_COST_N, (r_cn or 0.0) * (qty or 0.0), True)
-    if r_cf is not None: _apply_value(el, P_COST_F, (r_cf or 0.0) * (qty or 0.0), True)
-    if r_ln is not None: _apply_value(el, P_LAB_N, (r_ln or 0.0) * (qty or 0.0), False)
-    if r_lf is not None: _apply_value(el, P_LAB_F, (r_lf or 0.0) * (qty or 0.0), False)
+    if r_cn is not None:
+        val = (r_cn or 0.0) * (qty or 0.0)
+        total_cost_n += val
+        _apply_value(el, P_COST_N, val, True)
+    if r_cf is not None:
+        val = (r_cf or 0.0) * (qty or 0.0)
+        total_cost_f += val
+        _apply_value(el, P_COST_F, val, True)
+    if r_ln is not None:
+        _apply_value(el, P_LAB_N, (r_ln or 0.0) * (qty or 0.0), False)
+    if r_lf is not None:
+        _apply_value(el, P_LAB_F, (r_lf or 0.0) * (qty or 0.0), False)
 
-# ------------------- основной цикл -------------------
-elements = _building_elements_all()
-if not forms.alert(u"Рассчитать для строительных элементов всего проекта?\nНайдено: {}".format(len(elements)), yes=True, no=True):
-    script.exit()
+# -------------------- оверлей-окно (безопасное) --------------------
+class RECT(ctypes.Structure):
+    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
 
-with revit.Transaction(u"ACBD: расчёт (строительные элементы, весь проект)"):
+def _get_revit_rect():
+    try:
+        hwnd = revit.uidoc.Application.MainWindowHandle
+        r = RECT()
+        ctypes.windll.user32.GetWindowRect(ctypes.c_void_p(int(hwnd.ToInt64())), ctypes.byref(r))
+        return r.left, r.top, r.right, r.bottom
+    except:
+        return None
+
+def _ensure_overlay_xaml(path):
+    if os.path.exists(path): return
+    xaml = u'''<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Стоимость проекта" Width="360" Height="140"
+    WindowStartupLocation="Manual" Left="10" Top="80"
+    WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+    ResizeMode="NoResize" Topmost="True" ShowInTaskbar="False">
+      <Border CornerRadius="10" Background="#EE202020" Padding="10" x:Name="DragArea">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <DockPanel>
+            <TextBlock Text="Стоимость проектируемого объекта"
+                       Foreground="White" FontWeight="Bold" FontSize="14" DockPanel.Dock="Left"/>
+            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+              <ToggleButton x:Name="PinBtn" Content="📌" Width="26" Height="24"
+                            Margin="0,0,6,0" Background="#33FFFFFF" Foreground="White" BorderThickness="0"
+                            ToolTip="Фиксировать к углу/Свободно" IsChecked="True"/>
+              <Button x:Name="CloseBtn" Content="×" Width="26" Height="24"
+                      Background="#33FFFFFF" Foreground="White" BorderThickness="0"/>
+            </StackPanel>
+          </DockPanel>
+          <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+            <TextBlock Text="Н: " Foreground="White" FontSize="16"/>
+            <TextBlock x:Name="CostN" Foreground="White" FontSize="16" FontWeight="Bold"/>
+          </StackPanel>
+          <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,4,0,0">
+            <TextBlock Text="Ф: " Foreground="White" FontSize="16"/>
+            <TextBlock x:Name="CostF" Foreground="White" FontSize="16" FontWeight="Bold"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+    </Window>'''
+    f = open(path, "wb"); f.write(xaml.encode("utf-8")); f.close()
+
+def _fmt_rub(val):
+    try: return (u"{:,.2f} ₽".format(float(val))).replace(u",", u" ").replace(u".", u",")
+    except: return unicode(val)
+
+def _show_overlay(total_n, total_f):
+    sticky = script.get_sticky(); KEY = "ACBD_COST_OVERLAY"
+
+    old = sticky.get(KEY)
+    if old:
+        try: old["timer"].Stop()
+        except: pass
+        try: old["wnd"].Close()
+        except: pass
+        sticky.pop(KEY, None)
+
+    xaml_path = os.path.join(os.path.dirname(__file__), "ProjectCostOverlay.xaml")
+    _ensure_overlay_xaml(xaml_path)
+    wnd = forms.WPFWindow(xaml_path)
+    try:
+        hwnd = revit.uidoc.Application.MainWindowHandle
+        WindowInteropHelper(wnd).Owner = hwnd
+    except: pass
+    try:
+        wnd.CostN.Text = _fmt_rub(total_n)
+        wnd.CostF.Text = _fmt_rub(total_f)
+    except: pass
+
+    state = {"corner":"TL", "dx":10, "dy":80}
+
+    def apply_anchor():
+        rc = _get_revit_rect()
+        if not rc: return
+        L,T,R,B = rc
+        if state["corner"] == "TL":
+            wnd.Left = L + state["dx"]; wnd.Top = T + state["dy"]
+        elif state["corner"] == "TR":
+            wnd.Left = R - wnd.Width - state["dx"]; wnd.Top = T + state["dy"]
+        elif state["corner"] == "BL":
+            wnd.Left = L + state["dx"]; wnd.Top = B - wnd.Height - state["dy"]
+        else:
+            wnd.Left = R - wnd.Width - state["dx"]; wnd.Top = B - wnd.Height - state["dy"]
+
+    def pick_nearest_corner():
+        rc = _get_revit_rect()
+        if not rc: return
+        L,T,R,B = rc
+        cx = wnd.Left + wnd.Width/2.0; cy = wnd.Top + wnd.Height/2.0
+        corners = {"TL":(L,T), "TR":(R,T), "BL":(L,B), "BR":(R,B)}
+        best, dmin = "TL", 10**9
+        for k,(x,y) in corners.items():
+            d = (cx-x)*(cx-x)+(cy-y)*(cy-y)
+            if d < dmin: best, dmin = k, d
+        state["corner"] = best
+        if best == "TL":
+            state["dx"] = max(8, int(wnd.Left - L));             state["dy"] = max(8, int(wnd.Top - T))
+        elif best == "TR":
+            state["dx"] = max(8, int(R - (wnd.Left + wnd.Width))); state["dy"] = max(8, int(wnd.Top - T))
+        elif best == "BL":
+            state["dx"] = max(8, int(wnd.Left - L));             state["dy"] = max(8, int(B - (wnd.Top + wnd.Height)))
+        else:
+            state["dx"] = max(8, int(R - (wnd.Left + wnd.Width))); state["dy"] = max(8, int(B - (wnd.Top + wnd.Height)))
+        apply_anchor()
+
+    def on_drag(sender, args):
+        try:
+            wnd.DragMove()
+            if wnd.PinBtn.IsChecked:
+                pick_nearest_corner()
+        except: pass
+    try: wnd.DragArea.MouseLeftButtonDown += on_drag
+    except: pass
+
+    timer = DispatcherTimer()
+    timer.Interval = TimeSpan.FromMilliseconds(400)
+    def on_tick(sender, args):
+        try:
+            if wnd.PinBtn.IsChecked:
+                apply_anchor()
+        except: pass
+    timer.Tick += on_tick
+
+    def on_close(sender, args):
+        try: timer.Stop()
+        except: pass
+        sticky.pop(KEY, None)
+    try: wnd.CloseBtn.Click += on_close
+    except: pass
+    try: wnd.Closed += on_close
+    except: pass
+
+    apply_anchor()
+    timer.Start()
+    sticky[KEY] = {"wnd": wnd, "timer": timer}
+    try: wnd.show()
+    except: wnd.show_dialog()
+
+# -------------------- запуск --------------------
+
+# диалог выбора области
+choice = forms.CommandSwitchWindow.show(
+    [u"Вся модель", u"Видимые элементы"],
+    message=u"Что пересчитывать?"
+) or u"Вся модель"
+
+if choice == u"Видимые элементы":
+    elements = _elements_visible(revit.active_view)
+else:
+    elements = _elements_all()
+
+with revit.Transaction(u"ACBD: расчёт стоимости/трудозатрат"):
     for el in elements:
         _calc_and_set(el)
 
-forms.alert(
-    u"Готово.\nЭлементов: {0}\nЗаписано в экземпляры: {1}\nЗаписано в типы: {2}\n"
-    u"Стоимость записана: {3}\nТрудозатраты записаны: {4}\n"
-    u"Авто-определений ЕИ: {5}".format(
-        len(elements), w_inst, w_type, cost_written, labor_written, auto_units
-    )
-)
+_show_overlay(total_cost_n, total_cost_f)
+
+out.print_md(u"### Готово")
+out.print_md(u"Элементов: **{0}** | В экземпляры: **{1}** | В типы: **{2}**"
+             .format(len(elements), w_inst, w_type))
+out.print_md(u"Стоимость записана: **{0}**, Трудозатраты записаны: **{1}**"
+             .format(cost_written, labor_written))
+out.print_md(u"ИТОГО Н: **{0}**, ИТОГО Ф: **{1}**"
+             .format(_fmt_currency(total_cost_n), _fmt_currency(total_cost_f)))
