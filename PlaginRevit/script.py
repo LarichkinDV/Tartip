@@ -218,11 +218,13 @@ updated = 0
 skipped_no_unit = 0
 skipped_other = 0
 
-if not forms.alert(
+confirm_message = (
     u"Пересчитать параметры стоимости и трудозатрат для {} элементов?\n"
-    u"Затрагиваемые параметры: \n • {}\n • {}\n • {}\n • {}".format(
-        len(elements), P_COST_N, P_COST_F, P_LAB_N, P_LAB_F
-    ),
+    u"Затрагиваемые параметры: \n • {}\n • {}\n • {}\n • {}"
+).format(len(elements), P_COST_N, P_COST_F, P_LAB_N, P_LAB_F)
+
+if not forms.alert(
+    confirm_message,
     yes=True,
     no=True,
 ):
@@ -253,12 +255,8 @@ out.print_md(u"*Обновлено элементов:* **{0}**".format(updated)
 out.print_md(u"*Пропущено (нет ед. изм.):* **{0}**".format(skipped_no_unit))
 out.print_md(u"*Пропущено (нет ставок/прочее):* **{0}**".format(skipped_other))
 
-summary_message = u"Готово.\nОбновлено: {0}\nБез ед. изм.: {1}\nБез ставок/прочее: {2}".format(
-    updated,
-    skipped_no_unit,
-    skipped_other,
-)
+summary_message = (
+    u"Готово.\nОбновлено: {0}\nБез ед. изм.: {1}\nБез ставок/прочее: {2}"
+).format(updated, skipped_no_unit, skipped_other)
 
-forms.alert(
-    summary_message,
-)
+forms.alert(summary_message)
