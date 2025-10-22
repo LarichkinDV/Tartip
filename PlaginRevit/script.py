@@ -1,133 +1,146 @@
 # -*- coding: utf-8 -*-
-import re, os, ctypes
-from pyrevit import revit, DB, forms, script
-from System.Collections.Generic import List
-from System.Windows.Interop import WindowInteropHelper
-from System.Windows.Threading import DispatcherTimer
-from System import TimeSpan
+
+import re
+from pyrevit import revit, DB, script, forms
+from System.Collections.Generic import List as CsList
+from System.Windows import (Application, Window, WindowStyle, ResizeMode, Thickness, FontWeights)
+from System.Windows.Controls import Border, StackPanel, TextBlock, Orientation, Separator
+from System.Windows.Media import SolidColorBrush, Color, Brushes
 
 doc = revit.doc
-out = script.get_output()
 
-# -------------------- параметры --------------------
-P_COST_N_RATE = u"ACBD_Н_ЦенаЗаЕдИзм"
-P_COST_F_RATE = u"ACBD_Ф_ЦенаЗаЕдИзм"
-P_LAB_N_RATE  = u"ACBD_Н_ТрудозатратыНаЕдИзм"
-P_LAB_F_RATE  = u"ACBD_Ф_ТрудозатратыНаЕдИзм"
+# --------- параметры ACBD ---------
+P_UNIT_T    = u"ACBD_ЕдиницаИзмерения"
+P_RATE_CN_T = u"ACBD_Н_ЦенаЗаЕдИзм"
+P_RATE_CF_T = u"ACBD_Ф_ЦенаЗаЕдИзм"
+P_RATE_LN_T = u"ACBD_Н_ТрудозатратыНаЕдИзм"
+P_RATE_LF_T = u"ACBD_Ф_ТрудозатратыНаЕдИзм"
 
-P_COST_N = u"ACBD_Н_СтоимостьЭлемента"
-P_COST_F = u"ACBD_Ф_СтоимостьЭлемента"
-P_LAB_N  = u"ACBD_Н_ТрудозатратыЭлемента"
-P_LAB_F  = u"ACBD_Ф_ТрудозатратыЭлемента"
+P_COST_N_I  = u"ACBD_Н_СтоимостьЭлемента"
+P_COST_F_I  = u"ACBD_Ф_СтоимостьЭлемента"
+P_LAB_N_I   = u"ACBD_Н_ТрудозатратыЭлемента"
+P_LAB_F_I   = u"ACBD_Ф_ТрудозатратыЭлемента"
 
-UNIT_PARAM_NAMES = (
-    u"ACBD_Н_ЕдиницаИзмерения",
-    u"ACBD_ЕдиницаИзмерения",
-    u"ADSK_Единица измерения",
-    u"Единица измерения",
-    u"Ед. изм.", u"Ед. изм",
-    u"Unit",
-)
-
-# -------------------- утилиты --------------------
+# --------- helpers ---------
 try:
-    _text_type = unicode  # type: ignore[name-defined]
-except NameError:  # pragma: no cover - python 3
-    _text_type = str
+    text_type = unicode
+except NameError:
+    text_type = str
 
+_C2L = {u"А":u"A",u"а":u"a",u"В":u"B",u"в":u"b",u"С":u"C",u"с":u"c",u"Е":u"E",u"е":u"e",
+        u"Н":u"H",u"н":u"h",u"К":u"K",u"к":u"k",u"М":u"M",u"м":u"m",u"О":u"O",u"о":u"o",
+        u"Р":u"P",u"р":u"p",u"Т":u"T",u"т":u"t",u"Х":u"X",u"х":u"x",u"У":u"Y",u"у":u"y"}
 
-def _to_text(v):
-    if v is None:
-        return None
+def _t(x):
+    if x is None: return None
     try:
-        if isinstance(v, _text_type):
-            return _text_type(v)
-    except Exception:
-        pass
-    to_string = getattr(v, "ToString", None)
-    if callable(to_string):
-        try:
-            return _text_type(to_string())
-        except Exception:
-            pass
-    try:
-        return _text_type(v)
-    except Exception:
-        pass
-    try:
-        return _text_type(str(v))
-    except Exception:
-        pass
-    return None
+        if isinstance(x, text_type): return x
+    except: pass
+    try: return text_type(x)
+    except:
+        try: return text_type(x.ToString())
+        except: return None
+
+def _fold_name(s):
+    s = (_t(s) or u"").replace(u"\u00A0", u" ").strip()
+    return u"".join(_C2L.get(ch, ch) for ch in s).lower()
 
 def _num(v):
     if v is None: return None
-    s = _to_text(v)
+    s = _t(v)
     if not s: return None
     s = re.sub(u"[^0-9,.-]", u"", s.strip()).replace(u",", u".")
     try: return float(s)
     except: return None
 
-_cyr2lat = {u'Н':u'H',u'н':u'h',u'Ф':u'F',u'ф':u'f',u'С':u'C',u'с':u'c',u'А':u'A',u'а':u'a',u'В':u'B',u'в':u'b',
-            u'Е':u'E',u'е':u'e',u'К':u'K',u'к':u'k',u'М':u'M',u'м':u'm',u'О':u'O',u'о':u'o',u'Р':u'P',u'р':u'p',
-            u'Т':u'T',u'т':u't',u'Х':u'X',u'х':u'x',u'У':u'Y',u'у':u'y'}
-def _latinize(s):
-    s = _to_text(s) or u""
-    return u"".join(_cyr2lat.get(ch, ch) for ch in s)
+def _fmt_money(v):
+    try:
+        return DB.UnitFormatUtils.Format(doc, DB.SpecTypeId.Currency, float(v), False, False)
+    except:
+        return (u"{:,.2f}".format(float(v))).replace(u",", u" ").replace(u".", u",")
 
-def _base_norm(name):
-    s = _latinize(name).lower().replace(u"\u00a0", u"")
-    for ch in (u" ", u"_", u".", u"-"): s = s.replace(ch, u"")
-    s = s.replace(u"единицаизмерения", u"едизм")
-    return s
+def _fmt_labor(v):
+    try:
+        return (u"{:,.2f}".format(float(v))).replace(u",", u" ").replace(u".", u",")
+    except:
+        return _t(v) or u""
 
-def _get_param(holder, name):
+def _lp(holder, name):
     if not holder: return None
     try:
         p = holder.LookupParameter(name)
         if p: return p
     except: pass
-    target = _base_norm(name)
-    pars = getattr(holder, "Parameters", None)
-    if not pars: return None
-    for p in pars:
-        try:
-            if _base_norm(p.Definition.Name) == target:
-                return p
-        except: pass
+    want = _fold_name(name)
+    try:
+        for p in holder.Parameters:
+            dn = _fold_name(getattr(p.Definition, "Name", u""))
+            if dn == want: return p
+    except: pass
     return None
 
-def _get_str(holder, name):
-    p = _get_param(holder, name)
-    if not p: return None
-    try:
-        if p.StorageType == DB.StorageType.String:
-            return _to_text(p.AsString())
-        return _to_text(p.AsValueString())
-    except: return None
-
-def _get_double(holder, name):
-    p = _get_param(holder, name)
-    if not p: return None
-    try:
-        if p.StorageType == DB.StorageType.Double: return p.AsDouble()
-        if p.StorageType == DB.StorageType.String: return _num(p.AsString())
-        return _num(p.AsValueString())
-    except: return None
-
-def _get_type(el):
+def _eltype(el):
     try: return doc.GetElement(el.GetTypeId())
     except: return None
 
-def _get_rate(el, name):
-    v = _get_str(el, name)
-    if v is None:
-        t = _get_type(el)
-        if t: v = _get_str(t, name)
-    return _num(v)
+def _get_str_from(holder, name):
+    p = _lp(holder, name)
+    if not p: return None
+    try:
+        if p.StorageType == DB.StorageType.String:
+            return _t(p.AsString())
+        return _t(p.AsValueString())
+    except: return None
 
-# -------------------- отбор строительных элементов --------------------
-ALLOWED = List[DB.BuiltInCategory]([
+def _get_num_from(holder, name):
+    p = _lp(holder, name)
+    if not p: return None
+    try:
+        if p.StorageType == DB.StorageType.Double:
+            return p.AsDouble()
+        if p.StorageType == DB.StorageType.String:
+            return _num(p.AsString())
+        return _num(p.AsValueString())
+    except: return None
+
+def _inst_param(el, name):
+    return _lp(el, name)
+
+def _is_currency(p):
+    try:
+        dt = p.Definition.GetDataType()
+        if dt and dt.Equals(DB.SpecTypeId.Currency): return True
+    except: pass
+    try:
+        return getattr(p.Definition, "ParameterType", None) == DB.ParameterType.Currency
+    except: return False
+
+def _try_set_number(p, value):
+    try:
+        if p.Set(float(value)): return True
+    except: pass
+    variants = (
+        _fmt_money(value),
+        u"{:.2f}".format(float(value)).replace(u".", u","),
+        u"{:,.2f}".format(float(value)).replace(u",", u" ").replace(u".", u","),
+        u"{:.2f}".format(float(value)),
+    ) if _is_currency(p) else (
+        u"{:,.2f}".format(float(value)).replace(u",", u" ").replace(u".", u","),
+        u"{:.2f}".format(float(value)),
+    )
+    for s in variants:
+        try:
+            if p.SetValueString(s): return True
+        except: pass
+    return False
+
+def _set_inst_number(el, name, value):
+    p = _inst_param(el, name)
+    if not p or getattr(p, "IsReadOnly", False): return False
+    return _try_set_number(p, value)
+
+# --------- отбор строительных элементов ---------
+ALLOWED = CsList[DB.BuiltInCategory]([
     DB.BuiltInCategory.OST_Walls,
     DB.BuiltInCategory.OST_Floors,
     DB.BuiltInCategory.OST_Roofs,
@@ -145,384 +158,278 @@ ALLOWED = List[DB.BuiltInCategory]([
     DB.BuiltInCategory.OST_GenericModel,
 ])
 
-def _has_any_acbd(el):
-    names = (P_COST_N_RATE,P_COST_F_RATE,P_LAB_N_RATE,P_LAB_F_RATE,P_COST_N,P_COST_F,P_LAB_N,P_LAB_F)
-    for n in names:
-        if _get_param(el, n): return True
-    t = _get_type(el)
-    if t:
-        for n in names:
-            if _get_param(t, n): return True
-    return False
+def _collect_all():
+    f = DB.ElementMulticategoryFilter(ALLOWED)
+    col = DB.FilteredElementCollector(doc).WhereElementIsNotElementType().WherePasses(f)
+    return [el for el in col
+            if getattr(el, "ViewSpecific", False) is False
+            and getattr(getattr(el, "Category", None), "CategoryType", None) == DB.CategoryType.Model]
 
-def _elements_all():
-    f_cats = DB.ElementMulticategoryFilter(ALLOWED)
-    col = (DB.FilteredElementCollector(doc)
-             .WhereElementIsNotElementType()
-             .WherePasses(f_cats))
-    res = []
-    for el in col:
-        if getattr(el, "ViewSpecific", False):  # детализ. элементы и т.п.
-            continue
-        cat = getattr(el, "Category", None)
-        if not cat or cat.CategoryType != DB.CategoryType.Model:
-            continue
-        if not _has_any_acbd(el):
-            continue
-        res.append(el)
-    return res
-
-def _elements_visible(view):
-    """Элементы, видимые на активном виде."""
-    f_cats = DB.ElementMulticategoryFilter(ALLOWED)
+def _collect_visible(view):
+    f = DB.ElementMulticategoryFilter(ALLOWED)
+    vis = DB.VisibleInViewFilter(doc, view.Id)
     col = (DB.FilteredElementCollector(doc, view.Id)
-             .WhereElementIsNotElementType()
-             .WherePasses(f_cats))
-    res = []
-    for el in col:
-        cat = getattr(el, "Category", None)
-        if not cat or cat.CategoryType != DB.CategoryType.Model:
-            continue
-        if not _has_any_acbd(el):
-            continue
-        res.append(el)
-    return res
+           .WhereElementIsNotElementType()
+           .WherePasses(f)
+           .WherePasses(vis))
+    return [el for el in col
+            if getattr(getattr(el, "Category", None), "CategoryType", None) == DB.CategoryType.Model]
 
-# -------------------- количества --------------------
-def _bip(name):
-    try: return getattr(DB.BuiltInParameter, name)
-    except: return None
-
-def _qty_area(el):
-    for bip_name in ("HOST_AREA_COMPUTED", "ROOM_AREA"):
-        bip = _bip(bip_name)
-        if not bip: continue
+# --------- количества из ИНСТАНС-параметров ---------
+def _get_double_si(el, names, unit_tid):
+    if not isinstance(names, (list, tuple)): names = (names,)
+    for nm in names:
+        p = _inst_param(el, nm)
+        if not p: continue
         try:
-            p = el.get_Parameter(bip)
-            if p and p.AsDouble() and p.AsDouble() > 0:
-                return DB.UnitUtils.ConvertFromInternalUnits(p.AsDouble(), DB.UnitTypeId.SquareMeters)
+            if p.StorageType == DB.StorageType.Double:
+                return DB.UnitUtils.ConvertFromInternalUnits(p.AsDouble(), unit_tid)
+            if p.StorageType == DB.StorageType.String:
+                v = _num(p.AsString())
+                if v is not None: return v
+            vs = _t(p.AsValueString()); v = _num(vs)
+            if v is not None: return v
         except: pass
-    for n in (u"Площадь", u"Area"):
-        v = _get_double(el, n)
-        if v is not None and v > 0: return v
-    return 0.0
-
-def _qty_volume(el):
-    for bip_name in ("HOST_VOLUME_COMPUTED", "ROOM_VOLUME"):
-        bip = _bip(bip_name)
-        if not bip: continue
-        try:
-            p = el.get_Parameter(bip)
-            if p and p.AsDouble() and p.AsDouble() > 0:
-                return DB.UnitUtils.ConvertFromInternalUnits(p.AsDouble(), DB.UnitTypeId.CubicMeters)
-        except: pass
-    for n in (u"Объем", u"Объём", u"Volume"):
-        v = _get_double(el, n)
-        if v is not None and v > 0: return v
-    return 0.0
-
-def _qty_length(el):
-    bip = _bip("CURVE_ELEM_LENGTH")
-    if bip:
-        try:
-            p = el.get_Parameter(bip)
-            if p and p.AsDouble() and p.AsDouble() > 0:
-                return DB.UnitUtils.ConvertFromInternalUnits(p.AsDouble(), DB.UnitTypeId.Meters)
-        except: pass
-    for n in (u"Длина", u"Length"):
-        v = _get_double(el, n)
-        if v is not None and v > 0: return v
-    return 0.0
-
-def _qty_by_unit(el, unit_text):
-    if not unit_text: return None
-    ukey = (_latinize(unit_text) or u"").lower().replace(u" ", u"")
-    if ukey in (u"м2", u"м²", u"m2"): return _qty_area(el)
-    if ukey in (u"м3", u"м³", u"m3"): return _qty_volume(el)
-    if ukey in (u"м", u"м.п.", u"мп", u"m"): return _qty_length(el)
-    if ukey in (u"шт", u"шт.", u"штука", u"pcs"): return 1.0
     return None
 
-def _auto_unit_and_qty(el):
-    a = _qty_area(el)
-    if a and a > 0: return u"м2", a, u"area"
-    v = _qty_volume(el)
-    if v and v > 0: return u"м3", v, u"volume"
-    l = _qty_length(el)
-    if l and l > 0: return u"м", l, u"length"
-    return u"шт", 1.0, u"count"
+def _qty(el, unit_text):
+    if not unit_text: return None
+    key = (_t(unit_text) or u"").strip().lower()
+    key = key.replace(u"\u00a0", u" ").replace(u" ", u"")
+    if key in (u"квм", u"кв.м", u"м2", u"м²", u"m2", u"sqm"): key = u"м2"
+    if key in (u"кубм", u"куб.м", u"м3", u"м³", u"m3", u"cbm"): key = u"м3"
+    if key in (u"м", u"мп", u"м.п", u"м.п.", u"п.м", u"pm", u"rm"): key = u"м"
+    if key in (u"шт", u"шт.", u"штука", u"pcs", u"pc"): key = u"шт"
 
-def _get_unit_and_qty(el):
-    for holder in (el, _get_type(el)):
-        if not holder: continue
-        for nm in UNIT_PARAM_NAMES:
-            s = _get_str(holder, nm)
-            if s:
-                q = _qty_by_unit(el, s)
-                if q is not None:
-                    return s, q, u"param"
-    return _auto_unit_and_qty(el)
+    if key == u"м2":
+        v = _get_double_si(el, (u"Area", u"Площадь"), DB.UnitTypeId.SquareMeters)
+        return 0.0 if v is None else v
+    if key == u"м3":
+        v = _get_double_si(el, (u"Volume", u"Объем", u"Объём"), DB.UnitTypeId.CubicMeters)
+        return 0.0 if v is None else v
+    if key == u"м":
+        v = _get_double_si(el, (u"Length", u"Длина", u"Perimeter"), DB.UnitTypeId.Meters)
+        return 0.0 if v is None else v
+    if key == u"шт":
+        return 1.0
+    return None
 
-# -------------------- запись чисел --------------------
-def _is_currency_param(p):
-    try:
-        dt = p.Definition.GetDataType()
-        if dt and dt.Equals(DB.SpecTypeId.Currency): return True
-    except: pass
-    try:
-        return getattr(p.Definition, "ParameterType", None) == DB.ParameterType.Currency
-    except: return False
+# --------- расчёт одного элемента ---------
+def _calc_element(el):
+    et = _eltype(el)
+    unit_text = _get_str_from(et, P_UNIT_T)
+    if not unit_text or not _t(unit_text).strip():
+        return False, None, None, None, None
 
-def _fmt_currency(val):
-    try:
-        return DB.UnitFormatUtils.Format(doc, DB.SpecTypeId.Currency, float(val), False, False)
-    except:
-        return (u"{:,.2f}".format(float(val))).replace(u",", u" ").replace(u".", u",")
+    q = _qty(el, unit_text)
+    if q is None:
+        return False, None, None, None, None
 
-def _try_set_with_formats(p, value, is_currency):
-    try:
-        if p.Set(float(value)): return True
-    except: pass
-    if is_currency:
-        for txt in (_fmt_currency(value),
-                    u"{:.2f}".format(float(value)).replace(u".", u","),
-                    u"{:,.2f}".format(float(value)).replace(u",", u" ").replace(u".", u","),
-                    u"{:.2f}".format(float(value))):
-            try:
-                if p.SetValueString(txt): return True
-            except: pass
-    else:
-        for txt in (u"{:.3f}".format(float(value)).replace(u".", u","), u"{:.3f}".format(float(value))):
-            try:
-                if p.SetValueString(txt): return True
-            except: pass
-    return False
+    r_cn = _get_num_from(et, P_RATE_CN_T)
+    r_cf = _get_num_from(et, P_RATE_CF_T)
+    r_ln = _get_num_from(et, P_RATE_LN_T)
+    r_lf = _get_num_from(et, P_RATE_LF_T)
 
-def _set_number_any(el, target_name, value):
-    p = _get_param(el, target_name)
-    if p and not getattr(p, "IsReadOnly", False):
-        if _try_set_with_formats(p, value, _is_currency_param(p)):
-            return True, "instance"
-    t = _get_type(el)
-    if t:
-        pt = _get_param(t, target_name)
-        if pt and not getattr(pt, "IsReadOnly", False):
-            if _try_set_with_formats(pt, value, _is_currency_param(pt)):
-                return True, "type"
-    return False, "missing"
-
-# -------------------- счётчики/итоги --------------------
-w_inst = w_type = 0
-auto_units = 0
-cost_written = labor_written = 0
-total_cost_n = 0.0
-total_cost_f = 0.0
-
-def _apply_value(el, target_name, value, is_cost):
-    global w_inst, w_type, cost_written, labor_written
-    ok, where = _set_number_any(el, target_name, value)
-    if ok:
-        if where == "instance": w_inst += 1
-        else: w_type += 1
-        if is_cost: cost_written += 1
-        else: labor_written += 1
-    return ok
-
-def _calc_and_set(el):
-    global auto_units, total_cost_n, total_cost_f
-    unit_txt, qty, src = _get_unit_and_qty(el)
-    if src != u"param": auto_units += 1
-
-    r_cn = _get_rate(el, P_COST_N_RATE)
-    r_cf = _get_rate(el, P_COST_F_RATE)
-    r_ln = _get_rate(el, P_LAB_N_RATE)
-    r_lf = _get_rate(el, P_LAB_F_RATE)
+    ok_any = False
+    cost_n = cost_f = lab_n = lab_f = None
 
     if r_cn is not None:
-        val = (r_cn or 0.0) * (qty or 0.0)
-        total_cost_n += val
-        _apply_value(el, P_COST_N, val, True)
+        cost_n = (r_cn or 0.0) * (q or 0.0)
+        ok_any |= _set_inst_number(el, P_COST_N_I, cost_n)
     if r_cf is not None:
-        val = (r_cf or 0.0) * (qty or 0.0)
-        total_cost_f += val
-        _apply_value(el, P_COST_F, val, True)
+        cost_f = (r_cf or 0.0) * (q or 0.0)
+        ok_any |= _set_inst_number(el, P_COST_F_I, cost_f)
     if r_ln is not None:
-        _apply_value(el, P_LAB_N, (r_ln or 0.0) * (qty or 0.0), False)
+        lab_n = (r_ln or 0.0) * (q or 0.0)
+        ok_any |= _set_inst_number(el, P_LAB_N_I, lab_n)
     if r_lf is not None:
-        _apply_value(el, P_LAB_F, (r_lf or 0.0) * (qty or 0.0), False)
+        lab_f = (r_lf or 0.0) * (q or 0.0)
+        ok_any |= _set_inst_number(el, P_LAB_F_I, lab_f)
 
-# -------------------- оверлей-окно (безопасное) --------------------
-class RECT(ctypes.Structure):
-    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
-                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+    return ok_any, cost_n, cost_f, lab_n, lab_f
 
-def _get_revit_rect():
+# --------- одно окно "Стоимость объекта" с сноской ---------
+COST_TAG   = "ACBD_COST_WINDOW"
+VALN_TAG   = "ACBD_VALN"    # Стоимость Н
+VALF_TAG   = "ACBD_VALF"    # Стоимость Ф
+VALLN_TAG  = "ACBD_VALLN"   # Трудозатраты Н
+VALLF_TAG  = "ACBD_VALLF"   # Трудозатраты Ф
+FOOTER_TAG = "ACBD_FOOTER"  # Сноска
+
+def _walk(o):
+    if o is None: return
+    yield o
+    for attr in ('Child', 'Content'):
+        try:
+            ch = getattr(o, attr, None)
+            if ch and ch is not o:
+                for x in _walk(ch): yield x
+        except: pass
     try:
-        hwnd = revit.uidoc.Application.MainWindowHandle
-        r = RECT()
-        ctypes.windll.user32.GetWindowRect(ctypes.c_void_p(int(hwnd.ToInt64())), ctypes.byref(r))
-        return r.left, r.top, r.right, r.bottom
+        chs = getattr(o, 'Children', None)
+        if chs:
+            for c in chs:
+                for x in _walk(c): yield x
+    except: pass
+
+def _find_child_by_tag(root, tag):
+    for n in _walk(root):
+        try:
+            if getattr(n, 'Tag', None) == tag:
+                return n
+        except: pass
+    return None
+
+def _find_window(tag):
+    try:
+        app = Application.Current
+        if not app: return None
+        found = []
+        for w in app.Windows:
+            try:
+                if getattr(w, "Tag", None) == tag and getattr(w, "IsVisible", False):
+                    found.append(w)
+            except: pass
+        if len(found) > 1:
+            for w in found[1:]:
+                try: w.Close()
+                except: pass
+        return found[0] if found else None
     except:
         return None
 
-def _ensure_overlay_xaml(path):
-    if os.path.exists(path): return
-    xaml = u'''<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Стоимость проекта" Width="360" Height="140"
-    WindowStartupLocation="Manual" Left="10" Top="80"
-    WindowStyle="None" AllowsTransparency="True" Background="Transparent"
-    ResizeMode="NoResize" Topmost="True" ShowInTaskbar="False">
-      <Border CornerRadius="10" Background="#EE202020" Padding="10" x:Name="DragArea">
-        <Grid>
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-          </Grid.RowDefinitions>
-          <DockPanel>
-            <TextBlock Text="Стоимость проектируемого объекта"
-                       Foreground="White" FontWeight="Bold" FontSize="14" DockPanel.Dock="Left"/>
-            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
-              <ToggleButton x:Name="PinBtn" Content="📌" Width="26" Height="24"
-                            Margin="0,0,6,0" Background="#33FFFFFF" Foreground="White" BorderThickness="0"
-                            ToolTip="Фиксировать к углу/Свободно" IsChecked="True"/>
-              <Button x:Name="CloseBtn" Content="×" Width="26" Height="24"
-                      Background="#33FFFFFF" Foreground="White" BorderThickness="0"/>
-            </StackPanel>
-          </DockPanel>
-          <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
-            <TextBlock Text="Н: " Foreground="White" FontSize="16"/>
-            <TextBlock x:Name="CostN" Foreground="White" FontSize="16" FontWeight="Bold"/>
-          </StackPanel>
-          <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,4,0,0">
-            <TextBlock Text="Ф: " Foreground="White" FontSize="16"/>
-            <TextBlock x:Name="CostF" Foreground="White" FontSize="16" FontWeight="Bold"/>
-          </StackPanel>
-        </Grid>
-      </Border>
-    </Window>'''
-    f = open(path, "wb"); f.write(xaml.encode("utf-8")); f.close()
+def _build_cost_content(wnd):
+    border = Border(); border.Padding = Thickness(10)
+    try: border.Background = SolidColorBrush(Color.FromRgb(32,32,32))
+    except: pass
+    wnd.Content = border
 
-def _fmt_rub(val):
-    try: return (u"{:,.2f} ₽".format(float(val))).replace(u",", u" ").replace(u".", u",")
-    except: return _text_type(val)
+    stack = StackPanel(); border.Child = stack
 
-def _show_overlay(total_n, total_f):
-    sticky = script.get_sticky(); KEY = "ACBD_COST_OVERLAY"
+    title = TextBlock()
+    title.Text = u"Стоимость проектируемого объекта"
+    title.FontWeight = FontWeights.Bold; title.FontSize = 14
+    try: title.Foreground = Brushes.White
+    except: pass
+    stack.Children.Add(title)
 
-    old = sticky.get(KEY)
-    if old:
-        try: old["timer"].Stop()
-        except: pass
-        try: old["wnd"].Close()
-        except: pass
-        sticky.pop(KEY, None)
+    capCost = TextBlock(); capCost.Text = u"СТОИМОСТЬ СТРОИТЕЛЬСТВА"; capCost.Margin = Thickness(0,8,0,2)
+    capCost.FontWeight = FontWeights.Bold
+    try: capCost.Foreground = Brushes.White
+    except: pass
+    stack.Children.Add(capCost)
 
-    xaml_path = os.path.join(os.path.dirname(__file__), "ProjectCostOverlay.xaml")
-    _ensure_overlay_xaml(xaml_path)
-    wnd = forms.WPFWindow(xaml_path)
+    row1 = StackPanel(); row1.Orientation = Orientation.Horizontal
+    t1 = TextBlock(); t1.Text = u"Нормативная: "; t1.FontSize = 16
+    v1 = TextBlock(); v1.FontSize = 16; v1.FontWeight = FontWeights.Bold; v1.Tag = VALN_TAG
+    try: t1.Foreground = Brushes.White; v1.Foreground = Brushes.White
+    except: pass
+    row1.Children.Add(t1); row1.Children.Add(v1); stack.Children.Add(row1)
+
+    row2 = StackPanel(); row2.Orientation = Orientation.Horizontal; row2.Margin = Thickness(0,2,0,0)
+    t2 = TextBlock(); t2.Text = u"Опытная: "; t2.FontSize = 16
+    v2 = TextBlock(); v2.FontSize = 16; v2.FontWeight = FontWeights.Bold; v2.Tag = VALF_TAG
+    try: t2.Foreground = Brushes.White; v2.Foreground = Brushes.White
+    except: pass
+    row2.Children.Add(t2); row2.Children.Add(v2); stack.Children.Add(row2)
+
+    capLab = TextBlock(); capLab.Text = u"ТРУДОЗАТРАТЫ"; capLab.Margin = Thickness(0,10,0,2)
+    capLab.FontWeight = FontWeights.Bold
+    try: capLab.Foreground = Brushes.White
+    except: pass
+    stack.Children.Add(capLab)
+
+    row3 = StackPanel(); row3.Orientation = Orientation.Horizontal
+    t3 = TextBlock(); t3.Text = u"Нормативная: "; t3.FontSize = 16
+    v3 = TextBlock(); v3.FontSize = 16; v3.FontWeight = FontWeights.Bold; v3.Tag = VALLN_TAG
+    try: t3.Foreground = Brushes.White; v3.Foreground = Brushes.White
+    except: pass
+    row3.Children.Add(t3); row3.Children.Add(v3); stack.Children.Add(row3)
+
+    row4 = StackPanel(); row4.Orientation = Orientation.Horizontal; row4.Margin = Thickness(0,2,0,0)
+    t4 = TextBlock(); t4.Text = u"Опытная: "; t4.FontSize = 16
+    v4 = TextBlock(); v4.FontSize = 16; v4.FontWeight = FontWeights.Bold; v4.Tag = VALLF_TAG
+    try: t4.Foreground = Brushes.White; v4.Foreground = Brushes.White
+    except: pass
+    row4.Children.Add(t4); row4.Children.Add(v4); stack.Children.Add(row4)
+
+    sep = Separator(); sep.Margin = Thickness(0,10,0,6)
+    stack.Children.Add(sep)
+
+    foot = TextBlock()
+    foot.Tag = FOOTER_TAG
+    foot.FontSize = 11
+    try: foot.Foreground = Brushes.Gainsboro
+    except: pass
+    stack.Children.Add(foot)
+
+def _ensure_cost_window():
+    wnd = _find_window(COST_TAG)
+    if not wnd:
+        wnd = Window()
+        wnd.Title = u"Стоимость объекта"
+        wnd.Width = 440; wnd.Height = 260
+        wnd.WindowStartupLocation = 0; wnd.Left = 20; wnd.Top = 80
+        wnd.WindowStyle = WindowStyle.ToolWindow
+        wnd.Topmost = True; wnd.ResizeMode = ResizeMode.NoResize
+        wnd.ShowInTaskbar = False; wnd.Tag = COST_TAG
+        _build_cost_content(wnd)
+        try: wnd.Show()
+        except: wnd.ShowDialog()
+    else:
+        need = [VALN_TAG, VALF_TAG, VALLN_TAG, VALLF_TAG, FOOTER_TAG]
+        if any(_find_child_by_tag(wnd, tag) is None for tag in need):
+            _build_cost_content(wnd)
+    return wnd
+
+def _update_cost_window(total_n, total_f, total_ln, total_lf, processed, okcnt, skipped, scope_text):
+    def fmt_money(v):
+        try:  return (u"{:,.2f} ₽".format(float(v))).replace(u",", u" ").replace(u".", u",")
+        except: return u"{}".format(v)
+    def fmt_lab(v):
+        return _fmt_labor(v) + u" ч*ч" if v is not None else u"—"
+    wnd = _ensure_cost_window()
+    v1 = _find_child_by_tag(wnd, VALN_TAG)
+    v2 = _find_child_by_tag(wnd, VALF_TAG)
+    v3 = _find_child_by_tag(wnd, VALLN_TAG)
+    v4 = _find_child_by_tag(wnd, VALLF_TAG)
+    if v1: v1.Text = fmt_money(total_n)
+    if v2: v2.Text = fmt_money(total_f)
+    if v3: v3.Text = fmt_lab(total_ln)
+    if v4: v4.Text = fmt_lab(total_lf)
+    foot = _find_child_by_tag(wnd, FOOTER_TAG)
+    if foot:
+        foot.Text = (u"Обработано: {0} | С расчётом: {1} | Пропущено: {2} | Область: {3}"
+                     .format(processed, okcnt, skipped, _t(scope_text) or u"—"))
     try:
-        hwnd = revit.uidoc.Application.MainWindowHandle
-        WindowInteropHelper(wnd).Owner = hwnd
-    except: pass
-    try:
-        wnd.CostN.Text = _fmt_rub(total_n)
-        wnd.CostF.Text = _fmt_rub(total_f)
+        if not wnd.IsVisible: wnd.Show()
     except: pass
 
-    state = {"corner":"TL", "dx":10, "dy":80}
+# --------- запуск: выбор области + расчёт ---------
+choice = forms.CommandSwitchWindow.show([u"Вся модель", u"Видимые элементы"],
+                                        message=u"Что пересчитывать?") or u"Видимые элементы"
+scope_text = choice
 
-    def apply_anchor():
-        rc = _get_revit_rect()
-        if not rc: return
-        L,T,R,B = rc
-        if state["corner"] == "TL":
-            wnd.Left = L + state["dx"]; wnd.Top = T + state["dy"]
-        elif state["corner"] == "TR":
-            wnd.Left = R - wnd.Width - state["dx"]; wnd.Top = T + state["dy"]
-        elif state["corner"] == "BL":
-            wnd.Left = L + state["dx"]; wnd.Top = B - wnd.Height - state["dy"]
-        else:
-            wnd.Left = R - wnd.Width - state["dx"]; wnd.Top = B - wnd.Height - state["dy"]
+elements = _collect_visible(revit.active_view) if choice == u"Видимые элементы" else _collect_all()
 
-    def pick_nearest_corner():
-        rc = _get_revit_rect()
-        if not rc: return
-        L,T,R,B = rc
-        cx = wnd.Left + wnd.Width/2.0; cy = wnd.Top + wnd.Height/2.0
-        corners = {"TL":(L,T), "TR":(R,T), "BL":(L,B), "BR":(R,B)}
-        best, dmin = "TL", 10**9
-        for k,(x,y) in corners.items():
-            d = (cx-x)*(cx-x)+(cy-y)*(cy-y)
-            if d < dmin: best, dmin = k, d
-        state["corner"] = best
-        if best == "TL":
-            state["dx"] = max(8, int(wnd.Left - L));             state["dy"] = max(8, int(wnd.Top - T))
-        elif best == "TR":
-            state["dx"] = max(8, int(R - (wnd.Left + wnd.Width))); state["dy"] = max(8, int(wnd.Top - T))
-        elif best == "BL":
-            state["dx"] = max(8, int(wnd.Left - L));             state["dy"] = max(8, int(B - (wnd.Top + wnd.Height)))
-        else:
-            state["dx"] = max(8, int(R - (wnd.Left + wnd.Width))); state["dy"] = max(8, int(B - (wnd.Top + wnd.Height)))
-        apply_anchor()
+total_n = 0.0
+total_f = 0.0
+total_ln = 0.0
+total_lf = 0.0
+ok_count = 0
+skipped_count = 0
 
-    def on_drag(sender, args):
-        try:
-            wnd.DragMove()
-            if wnd.PinBtn.IsChecked:
-                pick_nearest_corner()
-        except: pass
-    try: wnd.DragArea.MouseLeftButtonDown += on_drag
-    except: pass
-
-    timer = DispatcherTimer()
-    timer.Interval = TimeSpan.FromMilliseconds(400)
-    def on_tick(sender, args):
-        try:
-            if wnd.PinBtn.IsChecked:
-                apply_anchor()
-        except: pass
-    timer.Tick += on_tick
-
-    def on_close(sender, args):
-        try: timer.Stop()
-        except: pass
-        sticky.pop(KEY, None)
-    try: wnd.CloseBtn.Click += on_close
-    except: pass
-    try: wnd.Closed += on_close
-    except: pass
-
-    apply_anchor()
-    timer.Start()
-    sticky[KEY] = {"wnd": wnd, "timer": timer}
-    try: wnd.show()
-    except: wnd.show_dialog()
-
-# -------------------- запуск --------------------
-
-# диалог выбора области
-choice = forms.CommandSwitchWindow.show(
-    [u"Вся модель", u"Видимые элементы"],
-    message=u"Что пересчитывать?"
-) or u"Вся модель"
-
-if choice == u"Видимые элементы":
-    elements = _elements_visible(revit.active_view)
-else:
-    elements = _elements_all()
-
-with revit.Transaction(u"ACBD: расчёт стоимости/трудозатрат"):
+with revit.Transaction(u"ACBD: расчёт стоимости и трудозатрат"):
     for el in elements:
-        _calc_and_set(el)
+        ok, cN, cF, lN, lF = _calc_element(el)
+        if ok:
+            ok_count += 1
+            if cN is not None: total_n += float(cN)
+            if cF is not None: total_f += float(cF)
+            if lN is not None: total_ln += float(lN)
+            if lF is not None: total_lf += float(lF)
+        else:
+            skipped_count += 1
 
-_show_overlay(total_cost_n, total_cost_f)
-
-out.print_md(u"### Готово")
-out.print_md(u"Элементов: **{0}** | В экземпляры: **{1}** | В типы: **{2}**"
-             .format(len(elements), w_inst, w_type))
-out.print_md(u"Стоимость записана: **{0}**, Трудозатраты записаны: **{1}**"
-             .format(cost_written, labor_written))
-out.print_md(u"ИТОГО Н: **{0}**, ИТОГО Ф: **{1}**"
-             .format(_fmt_currency(total_cost_n), _fmt_currency(total_cost_f)))
+_update_cost_window(total_n, total_f, total_ln, total_lf,
+                    len(elements), ok_count, skipped_count, scope_text)
