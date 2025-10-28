@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 
 import re
-from pyrevit import revit, DB, script, forms
+from pyrevit import revit, DB, script
 from System.Collections.Generic import List as CsList
-from System.Windows import (Application, Window, WindowStyle, ResizeMode, Thickness, FontWeights)
-from System.Windows.Controls import Border, StackPanel, TextBlock, Orientation, Separator
+from System.Windows import (Application, Window, WindowStyle, ResizeMode, Thickness, FontWeights,
+                            HorizontalAlignment)
+from System.Windows.Controls import (Border, StackPanel, TextBlock, Orientation, Separator,
+                                     RadioButton, CheckBox, Button)
 from System.Windows.Media import SolidColorBrush, Color, Brushes
 
 doc = revit.doc
@@ -157,6 +159,57 @@ ALLOWED = CsList[DB.BuiltInCategory]([
     DB.BuiltInCategory.OST_CurtainWallMullions,
     DB.BuiltInCategory.OST_GenericModel,
 ])
+
+ST_EXIST = u"Существующие"
+ST_DEMOL = u"Демонтаж"
+ST_NEW   = u"Новые конструкции"
+ST_OTHER = u"Прочее"
+
+
+def _phase_names(el):
+    cr = None
+    dm = None
+    try:
+        p = el.get_Parameter(DB.BuiltInParameter.PHASE_CREATED)
+        if p:
+            pid = p.AsElementId()
+            if pid and pid.IntegerValue > 0:
+                ph = doc.GetElement(pid)
+                cr = _t(getattr(ph, "Name", None))
+    except:  # noqa: E722 - API access safety
+        pass
+    try:
+        p = el.get_Parameter(DB.BuiltInParameter.PHASE_DEMOLISHED)
+        if p:
+            pid = p.AsElementId()
+            if pid and pid.IntegerValue > 0:
+                ph = doc.GetElement(pid)
+                dm = _t(getattr(ph, "Name", None))
+    except:  # noqa: E722 - API access safety
+        pass
+    return cr, dm
+
+
+def _nru(s):
+    return (_t(s) or u"").strip().lower().replace(u"\u00a0", u" ")
+
+
+def _stage_bucket(el):
+    cr, dm = _phase_names(el)
+    crl, dml = _nru(cr), _nru(dm)
+    if (dml == u"демонтаж") and (crl == u"существующие"):
+        return ST_DEMOL
+    if (not dml) and (crl == u"новая конструкция"):
+        return ST_NEW
+    if crl == u"существующие":
+        return ST_EXIST
+    if u"демонтаж" in dml and u"существ" in crl:
+        return ST_DEMOL
+    if (not dml) and (u"нов" in crl):
+        return ST_NEW
+    if u"существ" in crl:
+        return ST_EXIST
+    return ST_OTHER
 
 def _collect_all():
     f = DB.ElementMulticategoryFilter(ALLOWED)
@@ -405,12 +458,117 @@ def _update_cost_window(total_n, total_f, total_ln, total_lf, processed, okcnt, 
         if not wnd.IsVisible: wnd.Show()
     except: pass
 
+# --------- выбор области и режима ---------
+
+
+class _ScopeDialog(object):
+    def __init__(self, default_visible=True):
+        self._result = None
+
+        wnd = Window()
+        wnd.Title = u"ACBD"
+        wnd.Width = 260
+        wnd.Height = 180
+        wnd.ResizeMode = ResizeMode.NoResize
+        wnd.WindowStyle = WindowStyle.ToolWindow
+        try:
+            from System.Windows import WindowStartupLocation  # noqa: WPS433
+            wnd.WindowStartupLocation = WindowStartupLocation.CenterOwner
+        except Exception:
+            pass
+
+        stack = StackPanel()
+        stack.Margin = Thickness(12)
+
+        label = TextBlock()
+        label.Text = u"Что пересчитывать?"
+        label.Margin = Thickness(0, 0, 0, 10)
+        stack.Children.Add(label)
+
+        self._scope_all = RadioButton()
+        self._scope_all.Content = u"Вся модель"
+        self._scope_all.Margin = Thickness(0, 0, 0, 4)
+        self._scope_all.IsChecked = bool(not default_visible)
+        stack.Children.Add(self._scope_all)
+
+        self._scope_visible = RadioButton()
+        self._scope_visible.Content = u"Видимые элементы"
+        self._scope_visible.IsChecked = bool(default_visible)
+        stack.Children.Add(self._scope_visible)
+
+        self._recon = CheckBox()
+        self._recon.Content = u"Реконструкция"
+        self._recon.Margin = Thickness(0, 12, 0, 0)
+        self._recon.IsChecked = False
+        stack.Children.Add(self._recon)
+
+        buttons = StackPanel()
+        buttons.Orientation = Orientation.Horizontal
+        buttons.HorizontalAlignment = HorizontalAlignment.Right
+        buttons.Margin = Thickness(0, 16, 0, 0)
+
+        ok_btn = Button()
+        ok_btn.Content = u"OK"
+        ok_btn.Width = 80
+        ok_btn.Margin = Thickness(0, 0, 6, 0)
+        ok_btn.IsDefault = True
+        ok_btn.Click += self._on_ok
+        buttons.Children.Add(ok_btn)
+
+        cancel_btn = Button()
+        cancel_btn.Content = u"Отмена"
+        cancel_btn.Width = 80
+        cancel_btn.IsCancel = True
+        cancel_btn.Click += self._on_cancel
+        buttons.Children.Add(cancel_btn)
+
+        stack.Children.Add(buttons)
+
+        wnd.Content = stack
+        self._window = wnd
+
+    def _on_ok(self, sender, args):
+        scope = u"Видимые элементы" if self._scope_visible.IsChecked is True else u"Вся модель"
+        recon = (self._recon.IsChecked is True)
+        self._result = (scope, recon)
+        try:
+            self._window.DialogResult = True
+        except Exception:  # noqa: WPS466
+            pass
+        self._window.Close()
+
+    def _on_cancel(self, sender, args):
+        self._result = None
+        try:
+            self._window.DialogResult = False
+        except Exception:  # noqa: WPS466
+            pass
+        self._window.Close()
+
+    def show_dialog(self):
+        try:
+            self._window.ShowDialog()
+        except Exception:  # noqa: WPS466 - fallback for modeless environments
+            self._window.Show()
+        return self._result
+
+
+def _select_scope(default_visible=True):
+    dlg = _ScopeDialog(default_visible=default_visible)
+    result = dlg.show_dialog()
+    if not result:
+        script.exit()
+    return result
+
+
 # --------- запуск: выбор области + расчёт ---------
-choice = forms.CommandSwitchWindow.show([u"Вся модель", u"Видимые элементы"],
-                                        message=u"Что пересчитывать?") or u"Видимые элементы"
-scope_text = choice
+choice, reconstruction_mode = _select_scope(default_visible=True)
+scope_text = choice + (u"; реконструкция" if reconstruction_mode else u"")
 
 elements = _collect_visible(revit.active_view) if choice == u"Видимые элементы" else _collect_all()
+if reconstruction_mode:
+    allowed_stages = {ST_DEMOL, ST_NEW}
+    elements = [el for el in elements if _stage_bucket(el) in allowed_stages]
 
 total_n = 0.0
 total_f = 0.0

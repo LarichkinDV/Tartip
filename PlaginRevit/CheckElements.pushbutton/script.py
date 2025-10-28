@@ -2,6 +2,8 @@
 import re, os, datetime, zipfile
 from pyrevit import revit, DB, forms, script
 from System.Collections.Generic import List as CsList
+from System.Windows import Window, WindowStyle, ResizeMode, Thickness, HorizontalAlignment
+from System.Windows.Controls import StackPanel, TextBlock, RadioButton, CheckBox, Button, Orientation
 
 doc = revit.doc
 out = script.get_output()
@@ -303,27 +305,27 @@ def _calc_element(el, buckets_calc, buckets_skip, totals):
     r_ln = _get_num_from(et, P_RATE_LN_T)
     r_lf = _get_num_from(et, P_RATE_LF_T)
 
-    ok_any = False
+    has_rate = False
     cost_n = cost_f = lab_n = lab_f = None
 
     if r_cn is not None:
         cost_n = (r_cn or 0.0) * (q or 0.0)
-        ok_any |= _set_inst_number(el, P_COST_N_I, cost_n)
+        has_rate = True
         totals["N"] += float(cost_n)
     if r_cf is not None:
         cost_f = (r_cf or 0.0) * (q or 0.0)
-        ok_any |= _set_inst_number(el, P_COST_F_I, cost_f)
+        has_rate = True
         totals["F"] += float(cost_f)
     if r_ln is not None:
         lab_n = (r_ln or 0.0) * (q or 0.0)
-        ok_any |= _set_inst_number(el, P_LAB_N_I, lab_n)
+        has_rate = True
         totals["LN"] += float(lab_n)
     if r_lf is not None:
         lab_f = (r_lf or 0.0) * (q or 0.0)
-        ok_any |= _set_inst_number(el, P_LAB_F_I, lab_f)
+        has_rate = True
         totals["LF"] += float(lab_f)
 
-    if not ok_any:
+    if not has_rate:
         buckets_skip.setdefault(stage, {}).setdefault(tname, []).append(
             dict(id=eid, cat=cat, tname=tname, reason=u"Нет ставок в типе")
         )
@@ -465,7 +467,9 @@ def _render_report(calc_map, skip_map, totals, processed, okcnt):
             html.append(u'</details>')
 
     html.append(u"</div></div>")
-    out.print_html(u"".join(html))
+    html_content = u"".join(html)
+    out.print_html(html_content)
+    return html_content
 
 # ---- XLSX (минимальный OpenXML, на случай проверки) ----
 def _xlsx_cell(v, is_text=False):
@@ -583,10 +587,113 @@ def _xlsx_build(filepath, calc_map, skip_map, totals):
     finally:
         z.close()
 
+# ---- Выбор области и режима ----
+class _ScopeDialog(object):
+    def __init__(self, default_visible=False):
+        self._result = None
+
+        wnd = Window()
+        wnd.Title = u"ACBD"
+        wnd.Width = 260
+        wnd.Height = 180
+        wnd.ResizeMode = ResizeMode.NoResize
+        wnd.WindowStyle = WindowStyle.ToolWindow
+        try:
+            from System.Windows import WindowStartupLocation  # noqa: WPS433
+            wnd.WindowStartupLocation = WindowStartupLocation.CenterOwner
+        except Exception:
+            pass
+
+        stack = StackPanel()
+        stack.Margin = Thickness(12)
+
+        label = TextBlock()
+        label.Text = u"Что пересчитывать?"
+        label.Margin = Thickness(0, 0, 0, 10)
+        stack.Children.Add(label)
+
+        self._scope_all = RadioButton()
+        self._scope_all.Content = u"Вся модель"
+        self._scope_all.Margin = Thickness(0, 0, 0, 4)
+        self._scope_all.IsChecked = bool(not default_visible)
+        stack.Children.Add(self._scope_all)
+
+        self._scope_visible = RadioButton()
+        self._scope_visible.Content = u"Видимые элементы"
+        self._scope_visible.IsChecked = bool(default_visible)
+        stack.Children.Add(self._scope_visible)
+
+        self._recon = CheckBox()
+        self._recon.Content = u"Реконструкция"
+        self._recon.Margin = Thickness(0, 12, 0, 0)
+        self._recon.IsChecked = False
+        stack.Children.Add(self._recon)
+
+        buttons = StackPanel()
+        buttons.Orientation = Orientation.Horizontal
+        buttons.HorizontalAlignment = HorizontalAlignment.Right
+        buttons.Margin = Thickness(0, 16, 0, 0)
+
+        ok_btn = Button()
+        ok_btn.Content = u"OK"
+        ok_btn.Width = 80
+        ok_btn.Margin = Thickness(0, 0, 6, 0)
+        ok_btn.IsDefault = True
+        ok_btn.Click += self._on_ok
+        buttons.Children.Add(ok_btn)
+
+        cancel_btn = Button()
+        cancel_btn.Content = u"Отмена"
+        cancel_btn.Width = 80
+        cancel_btn.IsCancel = True
+        cancel_btn.Click += self._on_cancel
+        buttons.Children.Add(cancel_btn)
+
+        stack.Children.Add(buttons)
+
+        wnd.Content = stack
+        self._window = wnd
+
+    def _on_ok(self, sender, args):
+        scope = u"Видимые элементы" if self._scope_visible.IsChecked is True else u"Вся модель"
+        recon = (self._recon.IsChecked is True)
+        self._result = (scope, recon)
+        try:
+            self._window.DialogResult = True
+        except Exception:
+            pass
+        self._window.Close()
+
+    def _on_cancel(self, sender, args):
+        self._result = None
+        try:
+            self._window.DialogResult = False
+        except Exception:
+            pass
+        self._window.Close()
+
+    def show_dialog(self):
+        try:
+            self._window.ShowDialog()
+        except Exception:
+            self._window.Show()
+        return self._result
+
+
+def _select_scope(default_visible=False):
+    dlg = _ScopeDialog(default_visible=default_visible)
+    result = dlg.show_dialog()
+    if not result:
+        script.exit()
+    return result
+
+
 # ---- Запуск ----
-choice = forms.CommandSwitchWindow.show([u"Вся модель", u"Видимые элементы"],
-                                        message=u"Что пересчитывать?") or u"Вся модель"
+choice, reconstruction_mode = _select_scope(default_visible=False)
 elements = _collect_visible(revit.active_view) if choice == u"Видимые элементы" else _collect_all()
+if reconstruction_mode:
+    allowed_stages = {ST_DEMOL, ST_NEW}
+    elements = [el for el in elements if _stage_bucket(el) in allowed_stages]
 
 totals = dict(N=0.0, F=0.0, LN=0.0, LF=0.0)
 calc_map = {}   # stage -> type -> {sumN,sumF,sumLN,sumLF,count,items[]}
@@ -598,7 +705,7 @@ with revit.Transaction(u"ACBD: пересчёт стоимости и трудо
         if _calc_element(el, calc_map, skip_map, totals):
             okcnt += 1
 
-_render_report(calc_map, skip_map, totals, len(elements), okcnt)
+report_html = _render_report(calc_map, skip_map, totals, len(elements), okcnt)
 
 # Предлагаем сохранить XLSX (опционально)
 fname = u"ACBD_Calc_{:%Y%m%d_%H%M}.xlsx".format(datetime.datetime.now())
@@ -609,3 +716,10 @@ if save:
         out.print_html(u'<p><b>XLSX сохранён:</b> <span class="mono">{}</span></p>'.format(_h(save)))
     except Exception as e:
         out.print_html(u'<p><b>Ошибка записи XLSX:</b> {}</p>'.format(_h(e)))
+else:
+    try:
+        out.clear()
+    except Exception:
+        pass
+    out.print_html(report_html)
+    out.print_html(u'<p><b>Сохранение XLSX отменено пользователем.</b></p>')
