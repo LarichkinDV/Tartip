@@ -703,16 +703,22 @@ with revit.Transaction(u"ACBD: пересчёт стоимости и трудо
             okcnt += 1
 
 report_html = _render_report(calc_map, skip_map, totals, len(elements), okcnt)
-out.print_html(report_html)
 
 # Предлагаем сохранить XLSX (опционально)
 fname = u"ACBD_Calc_{:%Y%m%d_%H%M}.xlsx".format(datetime.datetime.now())
 save = forms.save_file(file_ext="xlsx", default_name=fname, title=u"Сохранить отчёт XLSX (по рассчитанным)")
+
+status_html = None
 if save:
     try:
         _xlsx_build(save, calc_map, skip_map, totals)
-        out.print_html(u'<p><b>XLSX сохранён:</b> <span class="mono">{}</span></p>'.format(_h(save)))
+        status_html = u'<p><b>XLSX сохранён:</b> <span class="mono">{}</span></p>'.format(_h(save))
     except Exception as e:
-        out.print_html(u'<p><b>Ошибка записи XLSX:</b> {}</p>'.format(_h(e)))
+        status_html = u'<p><b>Ошибка записи XLSX:</b> {}</p>'.format(_h(e))
 else:
-    out.print_html(u'<p><b>Сохранение XLSX отменено пользователем.</b></p>')
+    status_html = u'<p><b>Сохранение XLSX отменено пользователем.</b></p>'
+
+if status_html:
+    out.print_html(status_html)
+
+out.print_html(report_html)
