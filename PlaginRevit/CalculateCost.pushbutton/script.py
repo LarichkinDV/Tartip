@@ -2,6 +2,7 @@
 
 import re
 import traceback
+import weakref
 from pyrevit import revit, DB, script, forms
 from System.Collections.Generic import List as CsList
 from System.Windows import (Application, Window, WindowStyle, ResizeMode, Thickness, FontWeights,
@@ -323,6 +324,48 @@ VALLN_TAG  = "ACBD_VALLN"   # Трудозатраты Н
 VALLF_TAG  = "ACBD_VALLF"   # Трудозатраты Ф
 FOOTER_TAG = "ACBD_FOOTER"  # Сноска
 
+class _CostWindowState(object):
+    def __init__(self):
+        self._pinned = _COST_PIN_DEFAULT
+        self._hooked = False
+        self._wnd_ref = None
+
+    @property
+    def pinned(self):
+        return self._pinned
+
+    @pinned.setter
+    def pinned(self, value):
+        self._pinned = bool(value)
+
+    @property
+    def hooked(self):
+        return self._hooked
+
+    @hooked.setter
+    def hooked(self, value):
+        self._hooked = bool(value)
+
+    def remember(self, wnd):
+        try:
+            self._wnd_ref = weakref.ref(wnd)
+        except TypeError:
+            self._wnd_ref = lambda wnd=wnd: wnd
+        self._hooked = False
+
+    def get_window(self):
+        if self._wnd_ref:
+            wnd = self._wnd_ref()
+            if wnd:
+                return wnd
+        return None
+
+    def matches(self, wnd):
+        return wnd is not None and wnd is self.get_window()
+
+
+_COST_STATE = _CostWindowState()
+
 def _walk(o):
     if o is None: return
     yield o
@@ -380,7 +423,7 @@ def _snap_cost_window(wnd):
 
 def _cost_window_location_changed(sender, args):
     try:
-        if getattr(sender, "_acbd_cost_pinned", False):
+        if _COST_STATE.matches(sender) and _COST_STATE.pinned:
             if (abs(sender.Left - _COST_ANCHOR_LEFT) > 0.5 or
                     abs(sender.Top - _COST_ANCHOR_TOP) > 0.5):
                 _snap_cost_window(sender)
@@ -389,7 +432,7 @@ def _cost_window_location_changed(sender, args):
 
 
 def _build_cost_content(wnd):
-    pinned = getattr(wnd, "_acbd_cost_pinned", _COST_PIN_DEFAULT)
+    pinned = _COST_STATE.pinned
 
     border = Border(); border.Padding = Thickness(12)
     wnd.Content = border
@@ -408,8 +451,8 @@ def _build_cost_content(wnd):
     pin_box.IsChecked = pinned
 
     def _update_pin(sender, args):
-        wnd._acbd_cost_pinned = bool(sender.IsChecked)
-        if wnd._acbd_cost_pinned:
+        _COST_STATE.pinned = bool(sender.IsChecked)
+        if _COST_STATE.pinned:
             _snap_cost_window(wnd)
 
     pin_box.Checked += _update_pin
@@ -460,7 +503,7 @@ def _build_cost_content(wnd):
         pass
     stack.Children.Add(foot)
 
-    if getattr(wnd, "_acbd_cost_pinned", _COST_PIN_DEFAULT):
+    if _COST_STATE.pinned:
         _snap_cost_window(wnd)
 
 def _ensure_cost_window():
@@ -472,29 +515,29 @@ def _ensure_cost_window():
         wnd.WindowStyle = WindowStyle.ToolWindow
         wnd.Topmost = True; wnd.ResizeMode = ResizeMode.NoResize
         wnd.ShowInTaskbar = False; wnd.Tag = COST_TAG
-        wnd._acbd_cost_pinned = _COST_PIN_DEFAULT
+        _COST_STATE.remember(wnd)
         try:
-            if not getattr(wnd, "_acbd_cost_loc_hooked", False):
-                wnd.LocationChanged += _cost_window_location_changed
-                wnd._acbd_cost_loc_hooked = True
+            wnd.LocationChanged += _cost_window_location_changed
+            _COST_STATE.hooked = True
         except Exception:
             pass
         _build_cost_content(wnd)
         try: wnd.Show()
         except: wnd.ShowDialog()
     else:
-        if not hasattr(wnd, "_acbd_cost_pinned"):
-            wnd._acbd_cost_pinned = _COST_PIN_DEFAULT
-        try:
-            if not getattr(wnd, "_acbd_cost_loc_hooked", False):
+        if not _COST_STATE.matches(wnd):
+            _COST_STATE.remember(wnd)
+            _COST_STATE.hooked = False
+        if not _COST_STATE.hooked:
+            try:
                 wnd.LocationChanged += _cost_window_location_changed
-                wnd._acbd_cost_loc_hooked = True
-        except Exception:
-            pass
+                _COST_STATE.hooked = True
+            except Exception:
+                pass
         need = [VALN_TAG, VALF_TAG, VALLN_TAG, VALLF_TAG, FOOTER_TAG]
         if any(_find_child_by_tag(wnd, tag) is None for tag in need):
             _build_cost_content(wnd)
-    if getattr(wnd, "_acbd_cost_pinned", False):
+    if _COST_STATE.pinned:
         _snap_cost_window(wnd)
     return wnd
 
