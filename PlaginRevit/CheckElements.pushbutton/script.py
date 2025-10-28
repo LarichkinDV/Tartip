@@ -2,6 +2,8 @@
 import re, os, datetime, zipfile
 from pyrevit import revit, DB, forms, script
 from System.Collections.Generic import List as CsList
+from System.Windows import Window, WindowStyle, ResizeMode, Thickness, HorizontalAlignment
+from System.Windows.Controls import StackPanel, TextBlock, RadioButton, CheckBox, Button, Orientation
 
 doc = revit.doc
 out = script.get_output()
@@ -584,55 +586,94 @@ def _xlsx_build(filepath, calc_map, skip_map, totals):
         z.close()
 
 # ---- Выбор области и режима ----
-_SCOPE_XAML = u"""<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"
-                        xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"
-                        Title=\"ACBD\" Height=\"180\" Width=\"260\"
-                        WindowStartupLocation=\"CenterOwner\"
-                        ResizeMode=\"NoResize\"
-                        WindowStyle=\"ToolWindow\">
-    <StackPanel Margin=\"12\">
-        <TextBlock Text=\"Что пересчитывать?\" Margin=\"0,0,0,10\"/>
-        <RadioButton x:Name=\"ScopeAll\" Content=\"Вся модель\" Margin=\"0,0,0,4\"/>
-        <RadioButton x:Name=\"ScopeVisible\" Content=\"Видимые элементы\"/>
-        <CheckBox x:Name=\"ReconCheck\" Content=\"Реконструкция\" Margin=\"0,12,0,0\"/>
-        <StackPanel Orientation=\"Horizontal\" HorizontalAlignment=\"Right\" Margin=\"0,16,0,0\">
-            <Button Content=\"OK\" Width=\"80\" Margin=\"0,0,6,0\" IsDefault=\"True\" Click=\"OnOk\"/>
-            <Button Content=\"Отмена\" Width=\"80\" IsCancel=\"True\" Click=\"OnCancel\"/>
-        </StackPanel>
-    </StackPanel>
-</Window>"""
-
-
-class _ScopeDialog(forms.WPFWindow):
+class _ScopeDialog(object):
     def __init__(self, default_visible=False):
-        forms.WPFWindow.__init__(self, _SCOPE_XAML)
-        self.ScopeVisible.IsChecked = default_visible
-        self.ScopeAll.IsChecked = not default_visible
         self._result = None
 
-    def OnOk(self, sender, args):
-        scope = u"Видимые элементы" if self.ScopeVisible.IsChecked else u"Вся модель"
-        recon = bool(self.ReconCheck.IsChecked)
+        wnd = Window()
+        wnd.Title = u"ACBD"
+        wnd.Width = 260
+        wnd.Height = 180
+        wnd.ResizeMode = ResizeMode.NoResize
+        wnd.WindowStyle = WindowStyle.ToolWindow
+        try:
+            from System.Windows import WindowStartupLocation  # noqa: WPS433
+            wnd.WindowStartupLocation = WindowStartupLocation.CenterOwner
+        except Exception:
+            pass
+
+        stack = StackPanel()
+        stack.Margin = Thickness(12)
+
+        label = TextBlock()
+        label.Text = u"Что пересчитывать?"
+        label.Margin = Thickness(0, 0, 0, 10)
+        stack.Children.Add(label)
+
+        self._scope_all = RadioButton()
+        self._scope_all.Content = u"Вся модель"
+        self._scope_all.Margin = Thickness(0, 0, 0, 4)
+        self._scope_all.IsChecked = not default_visible
+        stack.Children.Add(self._scope_all)
+
+        self._scope_visible = RadioButton()
+        self._scope_visible.Content = u"Видимые элементы"
+        self._scope_visible.IsChecked = default_visible
+        stack.Children.Add(self._scope_visible)
+
+        self._recon = CheckBox()
+        self._recon.Content = u"Реконструкция"
+        self._recon.Margin = Thickness(0, 12, 0, 0)
+        stack.Children.Add(self._recon)
+
+        buttons = StackPanel()
+        buttons.Orientation = Orientation.Horizontal
+        buttons.HorizontalAlignment = HorizontalAlignment.Right
+        buttons.Margin = Thickness(0, 16, 0, 0)
+
+        ok_btn = Button()
+        ok_btn.Content = u"OK"
+        ok_btn.Width = 80
+        ok_btn.Margin = Thickness(0, 0, 6, 0)
+        ok_btn.IsDefault = True
+        ok_btn.Click += self._on_ok
+        buttons.Children.Add(ok_btn)
+
+        cancel_btn = Button()
+        cancel_btn.Content = u"Отмена"
+        cancel_btn.Width = 80
+        cancel_btn.IsCancel = True
+        cancel_btn.Click += self._on_cancel
+        buttons.Children.Add(cancel_btn)
+
+        stack.Children.Add(buttons)
+
+        wnd.Content = stack
+        self._window = wnd
+
+    def _on_ok(self, sender, args):
+        scope = u"Видимые элементы" if bool(self._scope_visible.IsChecked) else u"Вся модель"
+        recon = bool(self._recon.IsChecked)
         self._result = (scope, recon)
         try:
-            self.DialogResult = True
-        except:  # noqa: E722 - DialogResult may be unavailable
+            self._window.DialogResult = True
+        except Exception:
             pass
-        self.Close()
+        self._window.Close()
 
-    def OnCancel(self, sender, args):
+    def _on_cancel(self, sender, args):
         self._result = None
         try:
-            self.DialogResult = False
-        except:  # noqa: E722
+            self._window.DialogResult = False
+        except Exception:
             pass
-        self.Close()
+        self._window.Close()
 
     def show_dialog(self):
         try:
-            self.ShowDialog()
-        except:  # noqa: E722 - fallback if modal mode unsupported
-            self.Show()
+            self._window.ShowDialog()
+        except Exception:
+            self._window.Show()
         return self._result
 
 
