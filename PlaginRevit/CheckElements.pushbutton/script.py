@@ -2,7 +2,7 @@
 import re, os, datetime, zipfile
 from pyrevit import revit, DB, forms, script
 from System.Collections.Generic import List as CsList
-from System.Windows import Window, WindowStyle, ResizeMode, Thickness, HorizontalAlignment
+from System.Windows import Window, WindowStyle, ResizeMode, Thickness, HorizontalAlignment, SizeToContent
 from System.Windows.Controls import StackPanel, TextBlock, RadioButton, CheckBox, Button, Orientation
 
 doc = revit.doc
@@ -377,7 +377,8 @@ def _render_report(calc_map, skip_map, totals, processed, okcnt):
 
     css = u"""
     <style>
-      .acbd-wrap{font-family:Segoe UI,Arial,sans-serif;font-size:13px;color:#1b1b1b;}
+      .acbd-wrap{font-family:Segoe UI,Arial,sans-serif;font-size:13px;color:#1b1b1b;padding:6px 0;}
+      .acbd-scroll{max-height:560px;overflow-y:auto;border:1px solid #d7d7d7;border-radius:8px;background:#ffffff;padding:14px 18px;box-shadow:inset 0 0 0 1px rgba(0,0,0,0.02);}
       .acbd h1{font-size:20px;margin:8px 0 8px;}
       .acbd h2{font-size:16px;margin:12px 0 8px;}
       .acbd h3{font-size:14px;margin:8px 0 6px;}
@@ -390,9 +391,13 @@ def _render_report(calc_map, skip_map, totals, processed, okcnt):
       details>summary{cursor:pointer;font-weight:600}
       .muted{color:#666}
       .mono{font-family:Consolas,Menlo,monospace}
+      .acbd-status{margin-bottom:14px;padding:10px 14px;border-radius:6px;border:1px solid #c9d7f0;background:#eef3ff;color:#213a6d;font-weight:500}
+      .acbd-status-ok{border-color:#b7d7b7;background:#ebf8eb;color:#1e5d1e}
+      .acbd-status-error{border-color:#e3bcbc;background:#fdeaea;color:#842020}
+      .acbd-status-muted{border-color:#d6d6d6;background:#f4f4f4;color:#4c4c4c}
     </style>"""
 
-    html = [u'<div class="acbd-wrap">', css, u'<div class="acbd">']
+    html = [u'<div class="acbd-wrap">', css, u'<div class="acbd-scroll">', u'<div class="acbd">']
 
     # ===== Заголовок: 4 ключевых суммы
     html.append(u"<h1>Стоимость проектируемого объекта</h1>")
@@ -466,10 +471,59 @@ def _render_report(calc_map, skip_map, totals, processed, okcnt):
                 html.append(u'</details>')
             html.append(u'</details>')
 
-    html.append(u"</div></div>")
-    html_content = u"".join(html)
-    out.print_html(html_content)
-    return html_content
+    html.append(u"</div></div></div>")
+    return u"".join(html)
+
+
+def _scroll_report_to_top():
+    script = u"""
+    <script>
+    (function(){
+        var sc = document.querySelector('.acbd-scroll');
+        if (sc) {
+            sc.scrollTop = 0;
+        }
+    })();
+    </script>
+    """
+    try:
+        out.print_html(script)
+    except Exception:
+        pass
+
+
+def _set_status_banner(inner_html, kind=u"info"):
+    block = u'<div class="acbd-status acbd-status-{} acbd-status-floating">{}</div>'.format(kind, inner_html)
+    script = u"""
+    <script>
+    (function(){
+        var wrap = document.querySelector('.acbd');
+        if (!wrap) {
+            return;
+        }
+        var candidates = document.querySelectorAll('.acbd-status-floating');
+        if (!candidates.length) {
+            return;
+        }
+        var candidate = candidates[candidates.length - 1];
+        candidate.classList.remove('acbd-status-floating');
+        var existing = wrap.querySelector('.acbd-status');
+        if (existing && existing !== candidate) {
+            existing.parentNode.removeChild(existing);
+        }
+        wrap.insertBefore(candidate, wrap.firstChild);
+        var sc = document.querySelector('.acbd-scroll');
+        if (sc) {
+            sc.scrollTop = 0;
+        }
+    })();
+    </script>
+    """
+    try:
+        out.print_html(block + script)
+    except Exception:
+        out.print_html(block)
+        _scroll_report_to_top()
 
 # ---- XLSX (минимальный OpenXML, на случай проверки) ----
 def _xlsx_cell(v, is_text=False):
@@ -594,8 +648,7 @@ class _ScopeDialog(object):
 
         wnd = Window()
         wnd.Title = u"ACBD"
-        wnd.Width = 260
-        wnd.Height = 180
+        wnd.SizeToContent = SizeToContent.WidthAndHeight
         wnd.ResizeMode = ResizeMode.NoResize
         wnd.WindowStyle = WindowStyle.ToolWindow
         try:
@@ -706,6 +759,8 @@ with revit.Transaction(u"ACBD: пересчёт стоимости и трудо
             okcnt += 1
 
 report_html = _render_report(calc_map, skip_map, totals, len(elements), okcnt)
+out.print_html(report_html)
+_scroll_report_to_top()
 
 # Предлагаем сохранить XLSX (опционально)
 fname = u"ACBD_Calc_{:%Y%m%d_%H%M}.xlsx".format(datetime.datetime.now())
@@ -713,13 +768,8 @@ save = forms.save_file(file_ext="xlsx", default_name=fname, title=u"Сохран
 if save:
     try:
         _xlsx_build(save, calc_map, skip_map, totals)
-        out.print_html(u'<p><b>XLSX сохранён:</b> <span class="mono">{}</span></p>'.format(_h(save)))
+        _set_status_banner(u'<strong>XLSX сохранён:</strong> <span class="mono">{}</span>'.format(_h(save)), kind=u"ok")
     except Exception as e:
-        out.print_html(u'<p><b>Ошибка записи XLSX:</b> {}</p>'.format(_h(e)))
+        _set_status_banner(u'<strong>Ошибка записи XLSX:</strong> {}'.format(_h(e)), kind=u"error")
 else:
-    try:
-        out.clear()
-    except Exception:
-        pass
-    out.print_html(report_html)
-    out.print_html(u'<p><b>Сохранение XLSX отменено пользователем.</b></p>')
+    _set_status_banner(u'<strong>Сохранение XLSX отменено пользователем.</strong>', kind=u"muted")

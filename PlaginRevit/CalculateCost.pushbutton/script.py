@@ -6,7 +6,7 @@ import traceback
 from pyrevit import revit, DB, script, forms
 from System.Collections.Generic import List as CsList
 from System.Windows import (Application, Window, WindowStyle, ResizeMode, Thickness, FontWeights,
-                            HorizontalAlignment)
+                            HorizontalAlignment, SizeToContent)
 from System.Windows.Controls import (Border, StackPanel, TextBlock, Orientation, Separator,
                                      RadioButton, CheckBox, Button)
 from System.Windows.Media import SolidColorBrush, Color, Brushes
@@ -498,8 +498,7 @@ class _ScopeDialog(object):
 
         wnd = Window()
         wnd.Title = u"ACBD"
-        wnd.Width = 260
-        wnd.Height = 180
+        wnd.SizeToContent = SizeToContent.WidthAndHeight
         wnd.ResizeMode = ResizeMode.NoResize
         wnd.WindowStyle = WindowStyle.ToolWindow
         try:
