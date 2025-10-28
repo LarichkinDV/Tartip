@@ -583,10 +583,73 @@ def _xlsx_build(filepath, calc_map, skip_map, totals):
     finally:
         z.close()
 
+# ---- Выбор области и режима ----
+_SCOPE_XAML = u"""<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"
+                        xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"
+                        Title=\"ACBD\" Height=\"180\" Width=\"260\"
+                        WindowStartupLocation=\"CenterOwner\"
+                        ResizeMode=\"NoResize\"
+                        WindowStyle=\"ToolWindow\">
+    <StackPanel Margin=\"12\">
+        <TextBlock Text=\"Что пересчитывать?\" Margin=\"0,0,0,10\"/>
+        <RadioButton x:Name=\"ScopeAll\" Content=\"Вся модель\" Margin=\"0,0,0,4\"/>
+        <RadioButton x:Name=\"ScopeVisible\" Content=\"Видимые элементы\"/>
+        <CheckBox x:Name=\"ReconCheck\" Content=\"Реконструкция\" Margin=\"0,12,0,0\"/>
+        <StackPanel Orientation=\"Horizontal\" HorizontalAlignment=\"Right\" Margin=\"0,16,0,0\">
+            <Button Content=\"OK\" Width=\"80\" Margin=\"0,0,6,0\" IsDefault=\"True\" Click=\"OnOk\"/>
+            <Button Content=\"Отмена\" Width=\"80\" IsCancel=\"True\" Click=\"OnCancel\"/>
+        </StackPanel>
+    </StackPanel>
+</Window>"""
+
+
+class _ScopeDialog(forms.WPFWindow):
+    def __init__(self, default_visible=False):
+        forms.WPFWindow.__init__(self, _SCOPE_XAML)
+        self.ScopeVisible.IsChecked = default_visible
+        self.ScopeAll.IsChecked = not default_visible
+        self._result = None
+
+    def OnOk(self, sender, args):
+        scope = u"Видимые элементы" if self.ScopeVisible.IsChecked else u"Вся модель"
+        recon = bool(self.ReconCheck.IsChecked)
+        self._result = (scope, recon)
+        try:
+            self.DialogResult = True
+        except:  # noqa: E722 - DialogResult may be unavailable
+            pass
+        self.Close()
+
+    def OnCancel(self, sender, args):
+        self._result = None
+        try:
+            self.DialogResult = False
+        except:  # noqa: E722
+            pass
+        self.Close()
+
+    def show_dialog(self):
+        try:
+            self.ShowDialog()
+        except:  # noqa: E722 - fallback if modal mode unsupported
+            self.Show()
+        return self._result
+
+
+def _select_scope(default_visible=False):
+    dlg = _ScopeDialog(default_visible=default_visible)
+    result = dlg.show_dialog()
+    if not result:
+        script.exit()
+    return result
+
+
 # ---- Запуск ----
-choice = forms.CommandSwitchWindow.show([u"Вся модель", u"Видимые элементы"],
-                                        message=u"Что пересчитывать?") or u"Вся модель"
+choice, reconstruction_mode = _select_scope(default_visible=False)
 elements = _collect_visible(revit.active_view) if choice == u"Видимые элементы" else _collect_all()
+if reconstruction_mode:
+    allowed_stages = {ST_DEMOL, ST_NEW}
+    elements = [el for el in elements if _stage_bucket(el) in allowed_stages]
 
 totals = dict(N=0.0, F=0.0, LN=0.0, LF=0.0)
 calc_map = {}   # stage -> type -> {sumN,sumF,sumLN,sumLF,count,items[]}
