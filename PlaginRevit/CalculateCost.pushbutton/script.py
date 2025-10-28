@@ -4,6 +4,7 @@ import re
 import traceback
 import weakref
 from pyrevit import revit, DB, script, forms
+from System import Action
 from System.Collections.Generic import List as CsList
 from System.Windows import (Application, Window, WindowStyle, ResizeMode, Thickness, FontWeights,
                             HorizontalAlignment)
@@ -421,43 +422,49 @@ def _snap_cost_window(wnd):
         pass
 
 
+def _invoke_on_dispatcher(dispatcher, callback):
+    try:
+        wrapped = Action(callback)
+    except Exception:
+        wrapped = callback
+
+    attempts = (
+        lambda: dispatcher.BeginInvoke(wrapped),
+        lambda: dispatcher.BeginInvoke(wrapped, None),
+        lambda: dispatcher.Invoke(wrapped),
+        lambda: dispatcher.Invoke(wrapped, None),
+    )
+
+    for attempt in attempts:
+        try:
+            attempt()
+            return True
+        except Exception:
+            continue
+
+    try:
+        from System.Windows.Threading import DispatcherPriority  # noqa: WPS433
+
+        dispatcher.BeginInvoke(DispatcherPriority.Background, wrapped)
+        return True
+    except Exception:
+        pass
+
+    return False
+
+
 def _snap_cost_window_async(wnd):
     dispatcher = getattr(wnd, "Dispatcher", None)
 
     if dispatcher is not None:
-        def _snapper(*_):
+        def _snapper():
             try:
                 _snap_cost_window(wnd)
             except Exception:
                 pass
 
-        try:
-            dispatcher.BeginInvoke(_snapper)
+        if _invoke_on_dispatcher(dispatcher, _snapper):
             return
-        except Exception:
-            pass
-        try:
-            dispatcher.BeginInvoke(_snapper, None)
-            return
-        except Exception:
-            pass
-        try:
-            dispatcher.Invoke(_snapper)
-            return
-        except Exception:
-            pass
-        try:
-            dispatcher.Invoke(_snapper, None)
-            return
-        except Exception:
-            pass
-        try:
-            from System.Windows.Threading import DispatcherPriority  # noqa: WPS433
-
-            dispatcher.BeginInvoke(DispatcherPriority.Background, _snapper)
-            return
-        except Exception:
-            pass
 
     _snap_cost_window(wnd)
 
