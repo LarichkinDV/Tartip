@@ -305,27 +305,27 @@ def _calc_element(el, buckets_calc, buckets_skip, totals):
     r_ln = _get_num_from(et, P_RATE_LN_T)
     r_lf = _get_num_from(et, P_RATE_LF_T)
 
-    ok_any = False
+    has_rate = False
     cost_n = cost_f = lab_n = lab_f = None
 
     if r_cn is not None:
         cost_n = (r_cn or 0.0) * (q or 0.0)
-        ok_any |= _set_inst_number(el, P_COST_N_I, cost_n)
+        has_rate = True
         totals["N"] += float(cost_n)
     if r_cf is not None:
         cost_f = (r_cf or 0.0) * (q or 0.0)
-        ok_any |= _set_inst_number(el, P_COST_F_I, cost_f)
+        has_rate = True
         totals["F"] += float(cost_f)
     if r_ln is not None:
         lab_n = (r_ln or 0.0) * (q or 0.0)
-        ok_any |= _set_inst_number(el, P_LAB_N_I, lab_n)
+        has_rate = True
         totals["LN"] += float(lab_n)
     if r_lf is not None:
         lab_f = (r_lf or 0.0) * (q or 0.0)
-        ok_any |= _set_inst_number(el, P_LAB_F_I, lab_f)
+        has_rate = True
         totals["LF"] += float(lab_f)
 
-    if not ok_any:
+    if not has_rate:
         buckets_skip.setdefault(stage, {}).setdefault(tname, []).append(
             dict(id=eid, cat=cat, tname=tname, reason=u"Нет ставок в типе")
         )
