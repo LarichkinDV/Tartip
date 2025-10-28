@@ -1,7 +1,9 @@
+
 # -*- coding: utf-8 -*-
 
 import re
-from pyrevit import revit, DB, script
+import traceback
+from pyrevit import revit, DB, script, forms
 from System.Collections.Generic import List as CsList
 from System.Windows import (Application, Window, WindowStyle, ResizeMode, Thickness, FontWeights,
                             HorizontalAlignment)
@@ -10,6 +12,7 @@ from System.Windows.Controls import (Border, StackPanel, TextBlock, Orientation,
 from System.Windows.Media import SolidColorBrush, Color, Brushes
 
 doc = revit.doc
+out = script.get_output()
 
 # --------- параметры ACBD ---------
 P_UNIT_T    = u"ACBD_ЕдиницаИзмерения"
@@ -32,6 +35,16 @@ except NameError:
 _C2L = {u"А":u"A",u"а":u"a",u"В":u"B",u"в":u"b",u"С":u"C",u"с":u"c",u"Е":u"E",u"е":u"e",
         u"Н":u"H",u"н":u"h",u"К":u"K",u"к":u"k",u"М":u"M",u"м":u"m",u"О":u"O",u"о":u"o",
         u"Р":u"P",u"р":u"p",u"Т":u"T",u"т":u"t",u"Х":u"X",u"х":u"x",u"У":u"Y",u"у":u"y"}
+
+
+def _h(s):
+    if s is None:
+        return u""
+    s = _t(s)
+    return (s.replace(u"&", u"&amp;")
+             .replace(u"<", u"&lt;")
+             .replace(u">", u"&gt;")
+             .replace(u'"', u"&quot;"))
 
 def _t(x):
     if x is None: return None
@@ -461,6 +474,24 @@ def _update_cost_window(total_n, total_f, total_ln, total_lf, processed, okcnt, 
 # --------- выбор области и режима ---------
 
 
+def _show_error_dialog(exc):
+    tb = traceback.format_exc()
+    header = u"Ошибка выполнения скрипта"
+    error_text = _t(exc) or exc.__class__.__name__
+    message = u"{}: {}".format(header, error_text)
+    try:
+        forms.alert(message, title=u"ACBD — ошибка", expanded=tb)
+        return
+    except Exception:
+        pass
+
+    try:
+        out.print_html(u'<p><b>{}</b>: {}</p>'.format(_h(header), _h(error_text)))
+        out.print_html(u'<pre style="white-space:pre-wrap">{}</pre>'.format(_h(tb)))
+    except Exception:
+        pass
+
+
 class _ScopeDialog(object):
     def __init__(self, default_visible=True):
         self._result = None
@@ -562,32 +593,42 @@ def _select_scope(default_visible=True):
 
 
 # --------- запуск: выбор области + расчёт ---------
-choice, reconstruction_mode = _select_scope(default_visible=True)
-scope_text = choice + (u"; реконструкция" if reconstruction_mode else u"")
 
-elements = _collect_visible(revit.active_view) if choice == u"Видимые элементы" else _collect_all()
-if reconstruction_mode:
-    allowed_stages = {ST_DEMOL, ST_NEW}
-    elements = [el for el in elements if _stage_bucket(el) in allowed_stages]
+def _main():
+    choice, reconstruction_mode = _select_scope(default_visible=True)
+    scope_text = choice + (u"; реконструкция" if reconstruction_mode else u"")
 
-total_n = 0.0
-total_f = 0.0
-total_ln = 0.0
-total_lf = 0.0
-ok_count = 0
-skipped_count = 0
+    elements = _collect_visible(revit.active_view) if choice == u"Видимые элементы" else _collect_all()
+    if reconstruction_mode:
+        allowed_stages = {ST_DEMOL, ST_NEW}
+        elements = [el for el in elements if _stage_bucket(el) in allowed_stages]
 
-with revit.Transaction(u"ACBD: расчёт стоимости и трудозатрат"):
-    for el in elements:
-        ok, cN, cF, lN, lF = _calc_element(el)
-        if ok:
-            ok_count += 1
-            if cN is not None: total_n += float(cN)
-            if cF is not None: total_f += float(cF)
-            if lN is not None: total_ln += float(lN)
-            if lF is not None: total_lf += float(lF)
-        else:
-            skipped_count += 1
+    total_n = 0.0
+    total_f = 0.0
+    total_ln = 0.0
+    total_lf = 0.0
+    ok_count = 0
+    skipped_count = 0
 
-_update_cost_window(total_n, total_f, total_ln, total_lf,
-                    len(elements), ok_count, skipped_count, scope_text)
+    with revit.Transaction(u"ACBD: расчёт стоимости и трудозатрат"):
+        for el in elements:
+            ok, cN, cF, lN, lF = _calc_element(el)
+            if ok:
+                ok_count += 1
+                if cN is not None: total_n += float(cN)
+                if cF is not None: total_f += float(cF)
+                if lN is not None: total_ln += float(lN)
+                if lF is not None: total_lf += float(lF)
+            else:
+                skipped_count += 1
+
+    _update_cost_window(total_n, total_f, total_ln, total_lf,
+                        len(elements), ok_count, skipped_count, scope_text)
+
+
+if __name__ == "__main__":
+    try:
+        _main()
+    except Exception as exc:  # noqa: BLE001 - surface unexpected issues to the user
+        _show_error_dialog(exc)
+        raise
