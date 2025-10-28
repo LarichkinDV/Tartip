@@ -8,7 +8,6 @@ from System.Windows import (Application, Window, WindowStyle, ResizeMode, Thickn
                             HorizontalAlignment)
 from System.Windows.Controls import (Border, StackPanel, TextBlock, Orientation, Separator,
                                      RadioButton, CheckBox, Button)
-from System.Windows.Media import SolidColorBrush, Color, Brushes
 
 doc = revit.doc
 out = script.get_output()
@@ -315,6 +314,9 @@ def _calc_element(el):
 
 # --------- одно окно "Стоимость объекта" с сноской ---------
 COST_TAG   = "ACBD_COST_WINDOW"
+_COST_ANCHOR_LEFT = 20
+_COST_ANCHOR_TOP = 120
+_COST_PIN_DEFAULT = True
 VALN_TAG   = "ACBD_VALN"    # Стоимость Н
 VALF_TAG   = "ACBD_VALF"    # Стоимость Ф
 VALLN_TAG  = "ACBD_VALLN"   # Трудозатраты Н
@@ -363,88 +365,137 @@ def _find_window(tag):
     except:
         return None
 
+
+def _snap_cost_window(wnd):
+    try:
+        wnd.WindowStartupLocation = 0  # Manual
+    except Exception:
+        pass
+    try:
+        wnd.Left = _COST_ANCHOR_LEFT
+        wnd.Top = _COST_ANCHOR_TOP
+    except Exception:
+        pass
+
+
+def _cost_window_location_changed(sender, args):
+    try:
+        if getattr(sender, "_acbd_cost_pinned", False):
+            if (abs(sender.Left - _COST_ANCHOR_LEFT) > 0.5 or
+                    abs(sender.Top - _COST_ANCHOR_TOP) > 0.5):
+                _snap_cost_window(sender)
+    except Exception:
+        pass
+
+
 def _build_cost_content(wnd):
-    border = Border(); border.Padding = Thickness(10)
-    try: border.Background = SolidColorBrush(Color.FromRgb(32,32,32))
-    except: pass
+    pinned = getattr(wnd, "_acbd_cost_pinned", _COST_PIN_DEFAULT)
+
+    border = Border(); border.Padding = Thickness(12)
     wnd.Content = border
 
     stack = StackPanel(); border.Child = stack
 
     title = TextBlock()
     title.Text = u"Стоимость проектируемого объекта"
-    title.FontWeight = FontWeights.Bold; title.FontSize = 14
-    try: title.Foreground = Brushes.White
-    except: pass
+    title.FontWeight = FontWeights.Bold
+    title.FontSize = 14
     stack.Children.Add(title)
 
-    capCost = TextBlock(); capCost.Text = u"СТОИМОСТЬ СТРОИТЕЛЬСТВА"; capCost.Margin = Thickness(0,8,0,2)
-    capCost.FontWeight = FontWeights.Bold
-    try: capCost.Foreground = Brushes.White
-    except: pass
-    stack.Children.Add(capCost)
+    pin_box = CheckBox()
+    pin_box.Margin = Thickness(0, 8, 0, 8)
+    pin_box.Content = u"Закрепить окно под вкладками видов"
+    pin_box.IsChecked = pinned
+
+    def _update_pin(sender, args):
+        wnd._acbd_cost_pinned = bool(sender.IsChecked)
+        if wnd._acbd_cost_pinned:
+            _snap_cost_window(wnd)
+
+    pin_box.Checked += _update_pin
+    pin_box.Unchecked += _update_pin
+    stack.Children.Add(pin_box)
+
+    stack.Children.Add(Separator())
+
+    cap_cost = TextBlock()
+    cap_cost.Text = u"СТОИМОСТЬ СТРОИТЕЛЬСТВА"
+    cap_cost.Margin = Thickness(0, 6, 0, 4)
+    cap_cost.FontWeight = FontWeights.Bold
+    stack.Children.Add(cap_cost)
 
     row1 = StackPanel(); row1.Orientation = Orientation.Horizontal
-    t1 = TextBlock(); t1.Text = u"Нормативная: "; t1.FontSize = 16
-    v1 = TextBlock(); v1.FontSize = 16; v1.FontWeight = FontWeights.Bold; v1.Tag = VALN_TAG
-    try: t1.Foreground = Brushes.White; v1.Foreground = Brushes.White
-    except: pass
+    t1 = TextBlock(); t1.Text = u"Нормативная: "; t1.FontSize = 15
+    v1 = TextBlock(); v1.FontSize = 15; v1.FontWeight = FontWeights.Bold; v1.Tag = VALN_TAG
     row1.Children.Add(t1); row1.Children.Add(v1); stack.Children.Add(row1)
 
-    row2 = StackPanel(); row2.Orientation = Orientation.Horizontal; row2.Margin = Thickness(0,2,0,0)
-    t2 = TextBlock(); t2.Text = u"Опытная: "; t2.FontSize = 16
-    v2 = TextBlock(); v2.FontSize = 16; v2.FontWeight = FontWeights.Bold; v2.Tag = VALF_TAG
-    try: t2.Foreground = Brushes.White; v2.Foreground = Brushes.White
-    except: pass
+    row2 = StackPanel(); row2.Orientation = Orientation.Horizontal; row2.Margin = Thickness(0, 2, 0, 0)
+    t2 = TextBlock(); t2.Text = u"Опытная: "; t2.FontSize = 15
+    v2 = TextBlock(); v2.FontSize = 15; v2.FontWeight = FontWeights.Bold; v2.Tag = VALF_TAG
     row2.Children.Add(t2); row2.Children.Add(v2); stack.Children.Add(row2)
 
-    capLab = TextBlock(); capLab.Text = u"ТРУДОЗАТРАТЫ"; capLab.Margin = Thickness(0,10,0,2)
-    capLab.FontWeight = FontWeights.Bold
-    try: capLab.Foreground = Brushes.White
-    except: pass
-    stack.Children.Add(capLab)
+    cap_lab = TextBlock(); cap_lab.Text = u"ТРУДОЗАТРАТЫ"; cap_lab.Margin = Thickness(0, 10, 0, 4)
+    cap_lab.FontWeight = FontWeights.Bold
+    stack.Children.Add(cap_lab)
 
     row3 = StackPanel(); row3.Orientation = Orientation.Horizontal
-    t3 = TextBlock(); t3.Text = u"Нормативная: "; t3.FontSize = 16
-    v3 = TextBlock(); v3.FontSize = 16; v3.FontWeight = FontWeights.Bold; v3.Tag = VALLN_TAG
-    try: t3.Foreground = Brushes.White; v3.Foreground = Brushes.White
-    except: pass
+    t3 = TextBlock(); t3.Text = u"Нормативная: "; t3.FontSize = 15
+    v3 = TextBlock(); v3.FontSize = 15; v3.FontWeight = FontWeights.Bold; v3.Tag = VALLN_TAG
     row3.Children.Add(t3); row3.Children.Add(v3); stack.Children.Add(row3)
 
-    row4 = StackPanel(); row4.Orientation = Orientation.Horizontal; row4.Margin = Thickness(0,2,0,0)
-    t4 = TextBlock(); t4.Text = u"Опытная: "; t4.FontSize = 16
-    v4 = TextBlock(); v4.FontSize = 16; v4.FontWeight = FontWeights.Bold; v4.Tag = VALLF_TAG
-    try: t4.Foreground = Brushes.White; v4.Foreground = Brushes.White
-    except: pass
+    row4 = StackPanel(); row4.Orientation = Orientation.Horizontal; row4.Margin = Thickness(0, 2, 0, 0)
+    t4 = TextBlock(); t4.Text = u"Опытная: "; t4.FontSize = 15
+    v4 = TextBlock(); v4.FontSize = 15; v4.FontWeight = FontWeights.Bold; v4.Tag = VALLF_TAG
     row4.Children.Add(t4); row4.Children.Add(v4); stack.Children.Add(row4)
 
-    sep = Separator(); sep.Margin = Thickness(0,10,0,6)
-    stack.Children.Add(sep)
+    stack.Children.Add(Separator())
 
     foot = TextBlock()
     foot.Tag = FOOTER_TAG
     foot.FontSize = 11
-    try: foot.Foreground = Brushes.Gainsboro
-    except: pass
+    try:
+        from System.Windows import TextWrapping  # noqa: WPS433
+        foot.TextWrapping = TextWrapping.Wrap
+    except Exception:
+        pass
     stack.Children.Add(foot)
+
+    if getattr(wnd, "_acbd_cost_pinned", _COST_PIN_DEFAULT):
+        _snap_cost_window(wnd)
 
 def _ensure_cost_window():
     wnd = _find_window(COST_TAG)
     if not wnd:
         wnd = Window()
         wnd.Title = u"Стоимость объекта"
-        wnd.Width = 440; wnd.Height = 260
-        wnd.WindowStartupLocation = 0; wnd.Left = 20; wnd.Top = 80
+        wnd.Width = 340; wnd.Height = 260
         wnd.WindowStyle = WindowStyle.ToolWindow
         wnd.Topmost = True; wnd.ResizeMode = ResizeMode.NoResize
         wnd.ShowInTaskbar = False; wnd.Tag = COST_TAG
+        wnd._acbd_cost_pinned = _COST_PIN_DEFAULT
+        try:
+            if not getattr(wnd, "_acbd_cost_loc_hooked", False):
+                wnd.LocationChanged += _cost_window_location_changed
+                wnd._acbd_cost_loc_hooked = True
+        except Exception:
+            pass
         _build_cost_content(wnd)
         try: wnd.Show()
         except: wnd.ShowDialog()
     else:
+        if not hasattr(wnd, "_acbd_cost_pinned"):
+            wnd._acbd_cost_pinned = _COST_PIN_DEFAULT
+        try:
+            if not getattr(wnd, "_acbd_cost_loc_hooked", False):
+                wnd.LocationChanged += _cost_window_location_changed
+                wnd._acbd_cost_loc_hooked = True
+        except Exception:
+            pass
         need = [VALN_TAG, VALF_TAG, VALLN_TAG, VALLF_TAG, FOOTER_TAG]
         if any(_find_child_by_tag(wnd, tag) is None for tag in need):
             _build_cost_content(wnd)
+    if getattr(wnd, "_acbd_cost_pinned", False):
+        _snap_cost_window(wnd)
     return wnd
 
 def _update_cost_window(total_n, total_f, total_ln, total_lf, processed, okcnt, skipped, scope_text):
