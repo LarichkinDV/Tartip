@@ -364,13 +364,34 @@ def _find_window(tag):
     except:
         return None
 
-def _build_cost_content(wnd):
-    border = Border(); border.Padding = Thickness(10)
-    try: border.Background = SolidColorBrush(Color.FromRgb(32,32,32))
-    except: pass
-    wnd.Content = border
+def _apply_common_window_style(wnd, tag=None):
+    wnd.WindowStyle = WindowStyle.ToolWindow
+    wnd.ResizeMode = ResizeMode.NoResize
+    wnd.SizeToContent = SizeToContent.WidthAndHeight
+    wnd.ShowInTaskbar = False
+    if tag is not None:
+        wnd.Tag = tag
+    try:
+        from System.Windows import WindowStartupLocation  # noqa: WPS433
+        try:
+            wnd.WindowStartupLocation = WindowStartupLocation.CenterOwner
+        except Exception:
+            wnd.WindowStartupLocation = WindowStartupLocation.CenterScreen
+    except Exception:
+        pass
 
+def _create_window_container(padding=10):
+    border = Border(); border.Padding = Thickness(padding)
+    try:
+        border.Background = SolidColorBrush(Color.FromRgb(32,32,32))
+    except Exception:
+        pass
     stack = StackPanel(); border.Child = stack
+    return border, stack
+
+def _build_cost_content(wnd):
+    border, stack = _create_window_container(padding=10)
+    wnd.Content = border
 
     title = TextBlock()
     title.Text = u"Стоимость проектируемого объекта"
@@ -434,11 +455,8 @@ def _ensure_cost_window():
     if not wnd:
         wnd = Window()
         wnd.Title = u"Стоимость объекта"
-        wnd.Width = 440; wnd.Height = 260
-        wnd.WindowStartupLocation = 0; wnd.Left = 20; wnd.Top = 80
-        wnd.WindowStyle = WindowStyle.ToolWindow
-        wnd.Topmost = True; wnd.ResizeMode = ResizeMode.NoResize
-        wnd.ShowInTaskbar = False; wnd.Tag = COST_TAG
+        _apply_common_window_style(wnd, tag=COST_TAG)
+        wnd.Topmost = True
         _build_cost_content(wnd)
         try: wnd.Show()
         except: wnd.ShowDialog()
@@ -507,29 +525,45 @@ class _ScopeDialog(object):
         except Exception:
             pass
 
-        stack = StackPanel()
-        stack.Margin = Thickness(12)
+        border, stack = _create_window_container(padding=12)
+        wnd.Content = border
 
         label = TextBlock()
         label.Text = u"Что пересчитывать?"
         label.Margin = Thickness(0, 0, 0, 10)
+        try:
+            label.Foreground = Brushes.White
+        except Exception:
+            pass
         stack.Children.Add(label)
 
         self._scope_all = RadioButton()
         self._scope_all.Content = u"Вся модель"
         self._scope_all.Margin = Thickness(0, 0, 0, 4)
         self._scope_all.IsChecked = bool(not default_visible)
+        try:
+            self._scope_all.Foreground = Brushes.White
+        except Exception:
+            pass
         stack.Children.Add(self._scope_all)
 
         self._scope_visible = RadioButton()
         self._scope_visible.Content = u"Видимые элементы"
         self._scope_visible.IsChecked = bool(default_visible)
+        try:
+            self._scope_visible.Foreground = Brushes.White
+        except Exception:
+            pass
         stack.Children.Add(self._scope_visible)
 
         self._recon = CheckBox()
         self._recon.Content = u"Реконструкция"
         self._recon.Margin = Thickness(0, 12, 0, 0)
         self._recon.IsChecked = False
+        try:
+            self._recon.Foreground = Brushes.White
+        except Exception:
+            pass
         stack.Children.Add(self._recon)
 
         buttons = StackPanel()
@@ -553,8 +587,6 @@ class _ScopeDialog(object):
         buttons.Children.Add(cancel_btn)
 
         stack.Children.Add(buttons)
-
-        wnd.Content = stack
         self._window = wnd
 
     def _on_ok(self, sender, args):
