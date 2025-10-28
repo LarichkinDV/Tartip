@@ -516,7 +516,14 @@ class _ScopeDialog(object):
 
         wnd = Window()
         wnd.Title = u"ACBD"
-        _apply_common_window_style(wnd)
+        wnd.SizeToContent = SizeToContent.WidthAndHeight
+        wnd.ResizeMode = ResizeMode.NoResize
+        wnd.WindowStyle = WindowStyle.ToolWindow
+        try:
+            from System.Windows import WindowStartupLocation  # noqa: WPS433
+            wnd.WindowStartupLocation = WindowStartupLocation.CenterOwner
+        except Exception:
+            pass
 
         border, stack = _create_window_container(padding=12)
         wnd.Content = border
