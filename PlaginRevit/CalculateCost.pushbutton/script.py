@@ -9,7 +9,6 @@ from System.Windows import (Application, Window, WindowStyle, ResizeMode, Thickn
                             HorizontalAlignment, SizeToContent)
 from System.Windows.Controls import (Border, StackPanel, TextBlock, Orientation, Separator,
                                      RadioButton, CheckBox, Button)
-from System.Windows.Media import SolidColorBrush, Color, Brushes
 
 doc = revit.doc
 out = script.get_output()
@@ -393,51 +392,36 @@ def _build_cost_content(wnd):
     border, stack = _create_window_container(padding=10)
     wnd.Content = border
 
-    title = TextBlock()
-    title.Text = u"Стоимость проектируемого объекта"
-    title.FontWeight = FontWeights.Bold; title.FontSize = 14
-    try: title.Foreground = Brushes.White
-    except: pass
-    stack.Children.Add(title)
+def _build_cost_content(wnd):
+    border, stack = _create_window_container(padding=10)
+    wnd.Content = border
 
     capCost = TextBlock(); capCost.Text = u"СТОИМОСТЬ СТРОИТЕЛЬСТВА"; capCost.Margin = Thickness(0,8,0,2)
     capCost.FontWeight = FontWeights.Bold
-    try: capCost.Foreground = Brushes.White
-    except: pass
     stack.Children.Add(capCost)
 
     row1 = StackPanel(); row1.Orientation = Orientation.Horizontal
     t1 = TextBlock(); t1.Text = u"Нормативная: "; t1.FontSize = 16
     v1 = TextBlock(); v1.FontSize = 16; v1.FontWeight = FontWeights.Bold; v1.Tag = VALN_TAG
-    try: t1.Foreground = Brushes.White; v1.Foreground = Brushes.White
-    except: pass
     row1.Children.Add(t1); row1.Children.Add(v1); stack.Children.Add(row1)
 
     row2 = StackPanel(); row2.Orientation = Orientation.Horizontal; row2.Margin = Thickness(0,2,0,0)
     t2 = TextBlock(); t2.Text = u"Опытная: "; t2.FontSize = 16
     v2 = TextBlock(); v2.FontSize = 16; v2.FontWeight = FontWeights.Bold; v2.Tag = VALF_TAG
-    try: t2.Foreground = Brushes.White; v2.Foreground = Brushes.White
-    except: pass
     row2.Children.Add(t2); row2.Children.Add(v2); stack.Children.Add(row2)
 
     capLab = TextBlock(); capLab.Text = u"ТРУДОЗАТРАТЫ"; capLab.Margin = Thickness(0,10,0,2)
     capLab.FontWeight = FontWeights.Bold
-    try: capLab.Foreground = Brushes.White
-    except: pass
     stack.Children.Add(capLab)
 
     row3 = StackPanel(); row3.Orientation = Orientation.Horizontal
     t3 = TextBlock(); t3.Text = u"Нормативная: "; t3.FontSize = 16
     v3 = TextBlock(); v3.FontSize = 16; v3.FontWeight = FontWeights.Bold; v3.Tag = VALLN_TAG
-    try: t3.Foreground = Brushes.White; v3.Foreground = Brushes.White
-    except: pass
     row3.Children.Add(t3); row3.Children.Add(v3); stack.Children.Add(row3)
 
     row4 = StackPanel(); row4.Orientation = Orientation.Horizontal; row4.Margin = Thickness(0,2,0,0)
     t4 = TextBlock(); t4.Text = u"Опытная: "; t4.FontSize = 16
     v4 = TextBlock(); v4.FontSize = 16; v4.FontWeight = FontWeights.Bold; v4.Tag = VALLF_TAG
-    try: t4.Foreground = Brushes.White; v4.Foreground = Brushes.White
-    except: pass
     row4.Children.Add(t4); row4.Children.Add(v4); stack.Children.Add(row4)
 
     sep = Separator(); sep.Margin = Thickness(0,10,0,6)
@@ -446,8 +430,7 @@ def _build_cost_content(wnd):
     foot = TextBlock()
     foot.Tag = FOOTER_TAG
     foot.FontSize = 11
-    try: foot.Foreground = Brushes.Gainsboro
-    except: pass
+    foot.Margin = Thickness(0, 6, 0, 0)
     stack.Children.Add(foot)
 
 def _ensure_cost_window():
@@ -483,7 +466,7 @@ def _update_cost_window(total_n, total_f, total_ln, total_lf, processed, okcnt, 
     if v4: v4.Text = fmt_lab(total_lf)
     foot = _find_child_by_tag(wnd, FOOTER_TAG)
     if foot:
-        foot.Text = (u"Обработано: {0} | С расчётом: {1} | Пропущено: {2} | Область: {3}"
+        foot.Text = (u"Обработано: {0} | С расчётом: {1} | Пропущено: {2}\nОбласть: {3}"
                      .format(processed, okcnt, skipped, _t(scope_text) or u"—"))
     try:
         if not wnd.IsVisible: wnd.Show()
