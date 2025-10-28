@@ -421,6 +421,47 @@ def _snap_cost_window(wnd):
         pass
 
 
+def _snap_cost_window_async(wnd):
+    dispatcher = getattr(wnd, "Dispatcher", None)
+
+    if dispatcher is not None:
+        def _snapper(*_):
+            try:
+                _snap_cost_window(wnd)
+            except Exception:
+                pass
+
+        try:
+            dispatcher.BeginInvoke(_snapper)
+            return
+        except Exception:
+            pass
+        try:
+            dispatcher.BeginInvoke(_snapper, None)
+            return
+        except Exception:
+            pass
+        try:
+            dispatcher.Invoke(_snapper)
+            return
+        except Exception:
+            pass
+        try:
+            dispatcher.Invoke(_snapper, None)
+            return
+        except Exception:
+            pass
+        try:
+            from System.Windows.Threading import DispatcherPriority  # noqa: WPS433
+
+            dispatcher.BeginInvoke(DispatcherPriority.Background, _snapper)
+            return
+        except Exception:
+            pass
+
+    _snap_cost_window(wnd)
+
+
 def _cost_window_location_changed(sender, args):
     try:
         if _COST_STATE.matches(sender) and _COST_STATE.pinned:
@@ -453,14 +494,16 @@ def _build_cost_content(wnd):
     def _update_pin(sender, args):
         try:
             checked = getattr(sender, "IsChecked", None)
-            _COST_STATE.pinned = True if checked is True else False
-            if _COST_STATE.pinned:
-                _snap_cost_window(wnd)
+            pinned = True if checked is True else False
+            if pinned == _COST_STATE.pinned:
+                return
+            _COST_STATE.pinned = pinned
+            if pinned:
+                _snap_cost_window_async(wnd)
         except Exception:
             _COST_STATE.pinned = False
 
-    pin_box.Checked += _update_pin
-    pin_box.Unchecked += _update_pin
+    pin_box.Click += _update_pin
     stack.Children.Add(pin_box)
 
     stack.Children.Add(Separator())
@@ -508,7 +551,7 @@ def _build_cost_content(wnd):
     stack.Children.Add(foot)
 
     if _COST_STATE.pinned:
-        _snap_cost_window(wnd)
+        _snap_cost_window_async(wnd)
 
 def _ensure_cost_window():
     wnd = _find_window(COST_TAG)
@@ -542,7 +585,7 @@ def _ensure_cost_window():
         if any(_find_child_by_tag(wnd, tag) is None for tag in need):
             _build_cost_content(wnd)
     if _COST_STATE.pinned:
-        _snap_cost_window(wnd)
+        _snap_cost_window_async(wnd)
     return wnd
 
 def _update_cost_window(total_n, total_f, total_ln, total_lf, processed, okcnt, skipped, scope_text):
