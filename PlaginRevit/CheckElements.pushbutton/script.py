@@ -613,17 +613,18 @@ class _ScopeDialog(object):
         self._scope_all = RadioButton()
         self._scope_all.Content = u"Вся модель"
         self._scope_all.Margin = Thickness(0, 0, 0, 4)
-        self._scope_all.IsChecked = not default_visible
+        self._scope_all.IsChecked = bool(not default_visible)
         stack.Children.Add(self._scope_all)
 
         self._scope_visible = RadioButton()
         self._scope_visible.Content = u"Видимые элементы"
-        self._scope_visible.IsChecked = default_visible
+        self._scope_visible.IsChecked = bool(default_visible)
         stack.Children.Add(self._scope_visible)
 
         self._recon = CheckBox()
         self._recon.Content = u"Реконструкция"
         self._recon.Margin = Thickness(0, 12, 0, 0)
+        self._recon.IsChecked = False
         stack.Children.Add(self._recon)
 
         buttons = StackPanel()
@@ -652,8 +653,8 @@ class _ScopeDialog(object):
         self._window = wnd
 
     def _on_ok(self, sender, args):
-        scope = u"Видимые элементы" if bool(self._scope_visible.IsChecked) else u"Вся модель"
-        recon = bool(self._recon.IsChecked)
+        scope = u"Видимые элементы" if self._scope_visible.IsChecked is True else u"Вся модель"
+        recon = (self._recon.IsChecked is True)
         self._result = (scope, recon)
         try:
             self._window.DialogResult = True
