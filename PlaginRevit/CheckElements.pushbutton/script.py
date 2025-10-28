@@ -8,6 +8,28 @@ from System.Windows.Controls import StackPanel, TextBlock, RadioButton, CheckBox
 doc = revit.doc
 out = script.get_output()
 
+
+def _scroll_output_to_top():
+    js_code = u"window.scrollTo(0,0);"
+    try:
+        out.inject_to_head(u"script", js_code, {u"type": u"text/javascript"})
+        return
+    except Exception:
+        pass
+    renderer = getattr(out, "renderer", None)
+    if renderer is None:
+        return
+    try:
+        document = renderer.Document
+    except Exception:
+        document = None
+    if document is None:
+        return
+    try:
+        document.InvokeScript(u"eval", [js_code])
+    except Exception:
+        pass
+
 # ---- ACBD параметры ----
 # Источник (ТИП)
 P_UNIT_T    = u"ACBD_ЕдиницаИзмерения"
@@ -703,16 +725,23 @@ with revit.Transaction(u"ACBD: пересчёт стоимости и трудо
             okcnt += 1
 
 report_html = _render_report(calc_map, skip_map, totals, len(elements), okcnt)
-out.print_html(report_html)
 
 # Предлагаем сохранить XLSX (опционально)
 fname = u"ACBD_Calc_{:%Y%m%d_%H%M}.xlsx".format(datetime.datetime.now())
 save = forms.save_file(file_ext="xlsx", default_name=fname, title=u"Сохранить отчёт XLSX (по рассчитанным)")
+
+status_html = None
 if save:
     try:
         _xlsx_build(save, calc_map, skip_map, totals)
-        out.print_html(u'<p><b>XLSX сохранён:</b> <span class="mono">{}</span></p>'.format(_h(save)))
+        status_html = u'<p><b>XLSX сохранён:</b> <span class="mono">{}</span></p>'.format(_h(save))
     except Exception as e:
-        out.print_html(u'<p><b>Ошибка записи XLSX:</b> {}</p>'.format(_h(e)))
+        status_html = u'<p><b>Ошибка записи XLSX:</b> {}</p>'.format(_h(e))
 else:
-    out.print_html(u'<p><b>Сохранение XLSX отменено пользователем.</b></p>')
+    status_html = u'<p><b>Сохранение XLSX отменено пользователем.</b></p>'
+
+if status_html:
+    out.print_html(status_html)
+
+out.print_html(report_html)
+_scroll_output_to_top()
