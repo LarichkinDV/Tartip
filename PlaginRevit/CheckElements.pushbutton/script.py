@@ -2,7 +2,7 @@
 import re, os, datetime, zipfile
 from pyrevit import revit, DB, forms, script
 from System.Collections.Generic import List as CsList
-from System.Windows import Window, WindowStyle, ResizeMode, Thickness, HorizontalAlignment
+from System.Windows import Window, WindowStyle, ResizeMode, Thickness, HorizontalAlignment, SizeToContent
 from System.Windows.Controls import StackPanel, TextBlock, RadioButton, CheckBox, Button, Orientation
 
 doc = revit.doc
@@ -467,9 +467,7 @@ def _render_report(calc_map, skip_map, totals, processed, okcnt):
             html.append(u'</details>')
 
     html.append(u"</div></div>")
-    html_content = u"".join(html)
-    out.print_html(html_content)
-    return html_content
+    return u"".join(html)
 
 # ---- XLSX (минимальный OpenXML, на случай проверки) ----
 def _xlsx_cell(v, is_text=False):
@@ -594,8 +592,7 @@ class _ScopeDialog(object):
 
         wnd = Window()
         wnd.Title = u"ACBD"
-        wnd.Width = 260
-        wnd.Height = 180
+        wnd.SizeToContent = SizeToContent.WidthAndHeight
         wnd.ResizeMode = ResizeMode.NoResize
         wnd.WindowStyle = WindowStyle.ToolWindow
         try:
@@ -706,6 +703,7 @@ with revit.Transaction(u"ACBD: пересчёт стоимости и трудо
             okcnt += 1
 
 report_html = _render_report(calc_map, skip_map, totals, len(elements), okcnt)
+out.print_html(report_html)
 
 # Предлагаем сохранить XLSX (опционально)
 fname = u"ACBD_Calc_{:%Y%m%d_%H%M}.xlsx".format(datetime.datetime.now())
@@ -717,9 +715,4 @@ if save:
     except Exception as e:
         out.print_html(u'<p><b>Ошибка записи XLSX:</b> {}</p>'.format(_h(e)))
 else:
-    try:
-        out.clear()
-    except Exception:
-        pass
-    out.print_html(report_html)
     out.print_html(u'<p><b>Сохранение XLSX отменено пользователем.</b></p>')

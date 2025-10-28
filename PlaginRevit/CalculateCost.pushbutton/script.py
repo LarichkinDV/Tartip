@@ -381,8 +381,16 @@ def _apply_common_window_style(wnd, tag=None):
 
 def _create_window_container(padding=10):
     border = Border(); border.Padding = Thickness(padding)
+    try:
+        border.Background = SolidColorBrush(Color.FromRgb(32,32,32))
+    except Exception:
+        pass
     stack = StackPanel(); border.Child = stack
     return border, stack
+
+def _build_cost_content(wnd):
+    border, stack = _create_window_container(padding=10)
+    wnd.Content = border
 
 def _build_cost_content(wnd):
     border, stack = _create_window_container(padding=10)
@@ -491,7 +499,14 @@ class _ScopeDialog(object):
 
         wnd = Window()
         wnd.Title = u"ACBD"
-        _apply_common_window_style(wnd)
+        wnd.SizeToContent = SizeToContent.WidthAndHeight
+        wnd.ResizeMode = ResizeMode.NoResize
+        wnd.WindowStyle = WindowStyle.ToolWindow
+        try:
+            from System.Windows import WindowStartupLocation  # noqa: WPS433
+            wnd.WindowStartupLocation = WindowStartupLocation.CenterOwner
+        except Exception:
+            pass
 
         border, stack = _create_window_container(padding=12)
         wnd.Content = border
@@ -499,23 +514,39 @@ class _ScopeDialog(object):
         label = TextBlock()
         label.Text = u"Что пересчитывать?"
         label.Margin = Thickness(0, 0, 0, 10)
+        try:
+            label.Foreground = Brushes.White
+        except Exception:
+            pass
         stack.Children.Add(label)
 
         self._scope_all = RadioButton()
         self._scope_all.Content = u"Вся модель"
         self._scope_all.Margin = Thickness(0, 0, 0, 4)
         self._scope_all.IsChecked = bool(not default_visible)
+        try:
+            self._scope_all.Foreground = Brushes.White
+        except Exception:
+            pass
         stack.Children.Add(self._scope_all)
 
         self._scope_visible = RadioButton()
         self._scope_visible.Content = u"Видимые элементы"
         self._scope_visible.IsChecked = bool(default_visible)
+        try:
+            self._scope_visible.Foreground = Brushes.White
+        except Exception:
+            pass
         stack.Children.Add(self._scope_visible)
 
         self._recon = CheckBox()
         self._recon.Content = u"Реконструкция"
         self._recon.Margin = Thickness(0, 12, 0, 0)
         self._recon.IsChecked = False
+        try:
+            self._recon.Foreground = Brushes.White
+        except Exception:
+            pass
         stack.Children.Add(self._recon)
 
         buttons = StackPanel()
