@@ -467,7 +467,9 @@ def _render_report(calc_map, skip_map, totals, processed, okcnt):
             html.append(u'</details>')
 
     html.append(u"</div></div>")
-    out.print_html(u"".join(html))
+    html_content = u"".join(html)
+    out.print_html(html_content)
+    return html_content
 
 # ---- XLSX (минимальный OpenXML, на случай проверки) ----
 def _xlsx_cell(v, is_text=False):
@@ -703,7 +705,7 @@ with revit.Transaction(u"ACBD: пересчёт стоимости и трудо
         if _calc_element(el, calc_map, skip_map, totals):
             okcnt += 1
 
-_render_report(calc_map, skip_map, totals, len(elements), okcnt)
+report_html = _render_report(calc_map, skip_map, totals, len(elements), okcnt)
 
 # Предлагаем сохранить XLSX (опционально)
 fname = u"ACBD_Calc_{:%Y%m%d_%H%M}.xlsx".format(datetime.datetime.now())
@@ -714,3 +716,10 @@ if save:
         out.print_html(u'<p><b>XLSX сохранён:</b> <span class="mono">{}</span></p>'.format(_h(save)))
     except Exception as e:
         out.print_html(u'<p><b>Ошибка записи XLSX:</b> {}</p>'.format(_h(e)))
+else:
+    try:
+        out.clear()
+    except Exception:
+        pass
+    out.print_html(report_html)
+    out.print_html(u'<p><b>Сохранение XLSX отменено пользователем.</b></p>')
