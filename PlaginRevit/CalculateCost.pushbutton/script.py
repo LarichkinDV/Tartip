@@ -158,6 +158,57 @@ ALLOWED = CsList[DB.BuiltInCategory]([
     DB.BuiltInCategory.OST_GenericModel,
 ])
 
+ST_EXIST = u"Существующие"
+ST_DEMOL = u"Демонтаж"
+ST_NEW   = u"Новые конструкции"
+ST_OTHER = u"Прочее"
+
+
+def _phase_names(el):
+    cr = None
+    dm = None
+    try:
+        p = el.get_Parameter(DB.BuiltInParameter.PHASE_CREATED)
+        if p:
+            pid = p.AsElementId()
+            if pid and pid.IntegerValue > 0:
+                ph = doc.GetElement(pid)
+                cr = _t(getattr(ph, "Name", None))
+    except:  # noqa: E722 - API access safety
+        pass
+    try:
+        p = el.get_Parameter(DB.BuiltInParameter.PHASE_DEMOLISHED)
+        if p:
+            pid = p.AsElementId()
+            if pid and pid.IntegerValue > 0:
+                ph = doc.GetElement(pid)
+                dm = _t(getattr(ph, "Name", None))
+    except:  # noqa: E722 - API access safety
+        pass
+    return cr, dm
+
+
+def _nru(s):
+    return (_t(s) or u"").strip().lower().replace(u"\u00a0", u" ")
+
+
+def _stage_bucket(el):
+    cr, dm = _phase_names(el)
+    crl, dml = _nru(cr), _nru(dm)
+    if (dml == u"демонтаж") and (crl == u"существующие"):
+        return ST_DEMOL
+    if (not dml) and (crl == u"новая конструкция"):
+        return ST_NEW
+    if crl == u"существующие":
+        return ST_EXIST
+    if u"демонтаж" in dml and u"существ" in crl:
+        return ST_DEMOL
+    if (not dml) and (u"нов" in crl):
+        return ST_NEW
+    if u"существ" in crl:
+        return ST_EXIST
+    return ST_OTHER
+
 def _collect_all():
     f = DB.ElementMulticategoryFilter(ALLOWED)
     col = DB.FilteredElementCollector(doc).WhereElementIsNotElementType().WherePasses(f)
@@ -405,12 +456,75 @@ def _update_cost_window(total_n, total_f, total_ln, total_lf, processed, okcnt, 
         if not wnd.IsVisible: wnd.Show()
     except: pass
 
+# --------- выбор области и режима ---------
+_SCOPE_XAML = u"""<Window xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"
+                        xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"
+                        Title=\"ACBD\" Height=\"180\" Width=\"260\"
+                        WindowStartupLocation=\"CenterOwner\"
+                        ResizeMode=\"NoResize\"
+                        WindowStyle=\"ToolWindow\">
+    <StackPanel Margin=\"12\">
+        <TextBlock Text=\"Что пересчитывать?\" Margin=\"0,0,0,10\"/>
+        <RadioButton x:Name=\"ScopeAll\" Content=\"Вся модель\" Margin=\"0,0,0,4\"/>
+        <RadioButton x:Name=\"ScopeVisible\" Content=\"Видимые элементы\"/>
+        <CheckBox x:Name=\"ReconCheck\" Content=\"Реконструкция\" Margin=\"0,12,0,0\"/>
+        <StackPanel Orientation=\"Horizontal\" HorizontalAlignment=\"Right\" Margin=\"0,16,0,0\">
+            <Button Content=\"OK\" Width=\"80\" Margin=\"0,0,6,0\" IsDefault=\"True\" Click=\"OnOk\"/>
+            <Button Content=\"Отмена\" Width=\"80\" IsCancel=\"True\" Click=\"OnCancel\"/>
+        </StackPanel>
+    </StackPanel>
+</Window>"""
+
+
+class _ScopeDialog(forms.WPFWindow):
+    def __init__(self, default_visible=True):
+        forms.WPFWindow.__init__(self, _SCOPE_XAML)
+        self.ScopeVisible.IsChecked = default_visible
+        self.ScopeAll.IsChecked = not default_visible
+        self._result = None
+
+    def OnOk(self, sender, args):
+        scope = u"Видимые элементы" if self.ScopeVisible.IsChecked else u"Вся модель"
+        recon = bool(self.ReconCheck.IsChecked)
+        self._result = (scope, recon)
+        try:
+            self.DialogResult = True
+        except:  # noqa: E722 - WPF DialogResult might be unavailable
+            pass
+        self.Close()
+
+    def OnCancel(self, sender, args):
+        self._result = None
+        try:
+            self.DialogResult = False
+        except:  # noqa: E722
+            pass
+        self.Close()
+
+    def show_dialog(self):
+        try:
+            self.ShowDialog()
+        except:  # noqa: E722 - fallback for non-modal environments
+            self.Show()
+        return self._result
+
+
+def _select_scope(default_visible=True):
+    dlg = _ScopeDialog(default_visible=default_visible)
+    result = dlg.show_dialog()
+    if not result:
+        script.exit()
+    return result
+
+
 # --------- запуск: выбор области + расчёт ---------
-choice = forms.CommandSwitchWindow.show([u"Вся модель", u"Видимые элементы"],
-                                        message=u"Что пересчитывать?") or u"Видимые элементы"
-scope_text = choice
+choice, reconstruction_mode = _select_scope(default_visible=True)
+scope_text = choice + (u"; реконструкция" if reconstruction_mode else u"")
 
 elements = _collect_visible(revit.active_view) if choice == u"Видимые элементы" else _collect_all()
+if reconstruction_mode:
+    allowed_stages = {ST_DEMOL, ST_NEW}
+    elements = [el for el in elements if _stage_bucket(el) in allowed_stages]
 
 total_n = 0.0
 total_f = 0.0
