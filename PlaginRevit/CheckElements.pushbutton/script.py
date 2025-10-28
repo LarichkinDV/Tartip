@@ -2,6 +2,8 @@
 import re, os, datetime, zipfile
 from pyrevit import revit, DB, forms, script
 from System.Collections.Generic import List as CsList
+from System.Windows import Window, WindowStyle, ResizeMode, Thickness, HorizontalAlignment
+from System.Windows.Controls import StackPanel, TextBlock, RadioButton, CheckBox, Button, Orientation
 
 doc = revit.doc
 out = script.get_output()
@@ -583,10 +585,113 @@ def _xlsx_build(filepath, calc_map, skip_map, totals):
     finally:
         z.close()
 
+# ---- Выбор области и режима ----
+class _ScopeDialog(object):
+    def __init__(self, default_visible=False):
+        self._result = None
+
+        wnd = Window()
+        wnd.Title = u"ACBD"
+        wnd.Width = 260
+        wnd.Height = 180
+        wnd.ResizeMode = ResizeMode.NoResize
+        wnd.WindowStyle = WindowStyle.ToolWindow
+        try:
+            from System.Windows import WindowStartupLocation  # noqa: WPS433
+            wnd.WindowStartupLocation = WindowStartupLocation.CenterOwner
+        except Exception:
+            pass
+
+        stack = StackPanel()
+        stack.Margin = Thickness(12)
+
+        label = TextBlock()
+        label.Text = u"Что пересчитывать?"
+        label.Margin = Thickness(0, 0, 0, 10)
+        stack.Children.Add(label)
+
+        self._scope_all = RadioButton()
+        self._scope_all.Content = u"Вся модель"
+        self._scope_all.Margin = Thickness(0, 0, 0, 4)
+        self._scope_all.IsChecked = bool(not default_visible)
+        stack.Children.Add(self._scope_all)
+
+        self._scope_visible = RadioButton()
+        self._scope_visible.Content = u"Видимые элементы"
+        self._scope_visible.IsChecked = bool(default_visible)
+        stack.Children.Add(self._scope_visible)
+
+        self._recon = CheckBox()
+        self._recon.Content = u"Реконструкция"
+        self._recon.Margin = Thickness(0, 12, 0, 0)
+        self._recon.IsChecked = False
+        stack.Children.Add(self._recon)
+
+        buttons = StackPanel()
+        buttons.Orientation = Orientation.Horizontal
+        buttons.HorizontalAlignment = HorizontalAlignment.Right
+        buttons.Margin = Thickness(0, 16, 0, 0)
+
+        ok_btn = Button()
+        ok_btn.Content = u"OK"
+        ok_btn.Width = 80
+        ok_btn.Margin = Thickness(0, 0, 6, 0)
+        ok_btn.IsDefault = True
+        ok_btn.Click += self._on_ok
+        buttons.Children.Add(ok_btn)
+
+        cancel_btn = Button()
+        cancel_btn.Content = u"Отмена"
+        cancel_btn.Width = 80
+        cancel_btn.IsCancel = True
+        cancel_btn.Click += self._on_cancel
+        buttons.Children.Add(cancel_btn)
+
+        stack.Children.Add(buttons)
+
+        wnd.Content = stack
+        self._window = wnd
+
+    def _on_ok(self, sender, args):
+        scope = u"Видимые элементы" if self._scope_visible.IsChecked is True else u"Вся модель"
+        recon = (self._recon.IsChecked is True)
+        self._result = (scope, recon)
+        try:
+            self._window.DialogResult = True
+        except Exception:
+            pass
+        self._window.Close()
+
+    def _on_cancel(self, sender, args):
+        self._result = None
+        try:
+            self._window.DialogResult = False
+        except Exception:
+            pass
+        self._window.Close()
+
+    def show_dialog(self):
+        try:
+            self._window.ShowDialog()
+        except Exception:
+            self._window.Show()
+        return self._result
+
+
+def _select_scope(default_visible=False):
+    dlg = _ScopeDialog(default_visible=default_visible)
+    result = dlg.show_dialog()
+    if not result:
+        script.exit()
+    return result
+
+
 # ---- Запуск ----
-choice = forms.CommandSwitchWindow.show([u"Вся модель", u"Видимые элементы"],
-                                        message=u"Что пересчитывать?") or u"Вся модель"
+choice, reconstruction_mode = _select_scope(default_visible=False)
 elements = _collect_visible(revit.active_view) if choice == u"Видимые элементы" else _collect_all()
+if reconstruction_mode:
+    allowed_stages = {ST_DEMOL, ST_NEW}
+    elements = [el for el in elements if _stage_bucket(el) in allowed_stages]
 
 totals = dict(N=0.0, F=0.0, LN=0.0, LF=0.0)
 calc_map = {}   # stage -> type -> {sumN,sumF,sumLN,sumLF,count,items[]}
