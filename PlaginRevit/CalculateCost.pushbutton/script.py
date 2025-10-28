@@ -451,9 +451,13 @@ def _build_cost_content(wnd):
     pin_box.IsChecked = pinned
 
     def _update_pin(sender, args):
-        _COST_STATE.pinned = bool(sender.IsChecked)
-        if _COST_STATE.pinned:
-            _snap_cost_window(wnd)
+        try:
+            checked = getattr(sender, "IsChecked", None)
+            _COST_STATE.pinned = True if checked is True else False
+            if _COST_STATE.pinned:
+                _snap_cost_window(wnd)
+        except Exception:
+            _COST_STATE.pinned = False
 
     pin_box.Checked += _update_pin
     pin_box.Unchecked += _update_pin
