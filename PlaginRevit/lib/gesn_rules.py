@@ -80,6 +80,10 @@ def _column_index(cell_ref):
     return index - 1
 
 
+def _normalize_sheet_name(name):
+    return (_as_text(name) or u"").replace(" ", "").replace("_", "").lower()
+
+
 def _get_sheet_path(zip_file, sheet_name):
     rels_ns = {
         "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
@@ -88,14 +92,36 @@ def _get_sheet_path(zip_file, sheet_name):
 
     with zip_file.open("xl/workbook.xml") as data:
         wb_tree = ElementTree.parse(data)
-    sheet_id = None
-    for sheet in wb_tree.getroot().iterfind("s:sheets/s:sheet", rels_ns):
-        if sheet.get("name") == sheet_name:
-            sheet_id = sheet.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
-            break
-    if not sheet_id:
-        return None
 
+    sheets = []
+    for sheet in wb_tree.getroot().iterfind("s:sheets/s:sheet", rels_ns):
+        sheets.append(
+            (
+                sheet.get("name"),
+                sheet.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"),
+            )
+        )
+
+    # Сначала пытаемся найти точное совпадение, затем совпадение по нормализованным именам,
+    # а в крайнем случае берём первый лист.
+    chosen = None
+    for sheet_name_raw, rel_id in sheets:
+        if sheet_name_raw == sheet_name:
+            chosen = (sheet_name_raw, rel_id)
+            break
+    if not chosen:
+        normalized_target = _normalize_sheet_name(sheet_name)
+        for sheet_name_raw, rel_id in sheets:
+            if _normalize_sheet_name(sheet_name_raw) == normalized_target:
+                chosen = (sheet_name_raw, rel_id)
+                break
+    if not chosen and sheets:
+        chosen = sheets[0]
+
+    if not chosen:
+        return None, []
+
+    _, sheet_id = chosen
     with zip_file.open("xl/_rels/workbook.xml.rels") as data:
         rels_tree = ElementTree.parse(data)
     for rel in rels_tree.getroot().iterfind("r:Relationship", rels_ns):
@@ -103,8 +129,8 @@ def _get_sheet_path(zip_file, sheet_name):
             target = rel.get("Target")
             if target.startswith("/"):
                 target = target[1:]
-            return "xl/" + target if not target.startswith("xl/") else target
-    return None
+            return ("xl/" + target if not target.startswith("xl/") else target), [name for name, _ in sheets]
+    return None, [name for name, _ in sheets]
 
 
 def _read_sheet_rows(zip_file, sheet_path, shared_strings):
@@ -142,9 +168,13 @@ def _read_sheet_rows(zip_file, sheet_path, shared_strings):
 def _load_sheet_as_rows(excel_path, sheet_name):
     """Простое чтение XLSX без внешних зависимостей."""
     with zipfile.ZipFile(excel_path, "r") as zf:
-        sheet_path = _get_sheet_path(zf, sheet_name)
+        sheet_path, available = _get_sheet_path(zf, sheet_name)
         if not sheet_path:
-            raise ValueError(u"Лист '{0}' не найден в файле правил".format(sheet_name))
+            raise ValueError(
+                u"Лист '{0}' не найден в файле правил. Доступные листы: {1}".format(
+                    sheet_name, u", ".join(available)
+                )
+            )
 
         shared_strings = _load_shared_strings(zf)
         return _read_sheet_rows(zf, sheet_path, shared_strings)
