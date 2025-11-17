@@ -90,8 +90,11 @@ def _get_sheet_path(zip_file, sheet_name):
         "s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
     }
 
+    # Читаем список листов и карту отношений workbook -> worksheet.
     with zip_file.open("xl/workbook.xml") as data:
         wb_tree = ElementTree.parse(data)
+    with zip_file.open("xl/_rels/workbook.xml.rels") as data:
+        rels_tree = ElementTree.parse(data)
 
     sheets = []
     for sheet in wb_tree.getroot().iterfind("s:sheets/s:sheet", rels_ns):
@@ -102,35 +105,53 @@ def _get_sheet_path(zip_file, sheet_name):
             )
         )
 
-    # Сначала пытаемся найти точное совпадение, затем совпадение по нормализованным именам,
-    # а в крайнем случае берём первый лист.
+    rels_map = {}
+    for rel in rels_tree.getroot().iterfind("r:Relationship", rels_ns):
+        rels_map[rel.get("Id")] = rel.get("Target")
+
+    available_names = [name for name, _ in sheets]
+
+    def _resolve_target(sheet_record):
+        name_raw, rel_id = sheet_record
+        if not rel_id:
+            return None
+        target = rels_map.get(rel_id)
+        if not target:
+            return None
+        if target.startswith("/"):
+            target = target[1:]
+        return "xl/" + target if not target.startswith("xl/") else target
+
+    # Сначала пытаемся найти точное совпадение, затем совпадение по нормализованным именам.
     chosen = None
-    for sheet_name_raw, rel_id in sheets:
-        if sheet_name_raw == sheet_name:
-            chosen = (sheet_name_raw, rel_id)
+    for sheet_record in sheets:
+        if sheet_record[0] == sheet_name:
+            chosen = sheet_record
             break
     if not chosen:
         normalized_target = _normalize_sheet_name(sheet_name)
-        for sheet_name_raw, rel_id in sheets:
-            if _normalize_sheet_name(sheet_name_raw) == normalized_target:
-                chosen = (sheet_name_raw, rel_id)
+        for sheet_record in sheets:
+            if _normalize_sheet_name(sheet_record[0]) == normalized_target:
+                chosen = sheet_record
                 break
+
+    # Выбираем первый доступный лист, если совпадения не найдены.
     if not chosen and sheets:
         chosen = sheets[0]
 
     if not chosen:
-        return None, []
+        return None, available_names
 
-    _, sheet_id = chosen
-    with zip_file.open("xl/_rels/workbook.xml.rels") as data:
-        rels_tree = ElementTree.parse(data)
-    for rel in rels_tree.getroot().iterfind("r:Relationship", rels_ns):
-        if rel.get("Id") == sheet_id:
-            target = rel.get("Target")
-            if target.startswith("/"):
-                target = target[1:]
-            return ("xl/" + target if not target.startswith("xl/") else target), [name for name, _ in sheets]
-    return None, [name for name, _ in sheets]
+    # Пытаемся получить путь к листу, при отсутствии связи используем первый доступный с корректной связью.
+    chosen_path = _resolve_target(chosen)
+    if not chosen_path:
+        for sheet_record in sheets:
+            candidate_path = _resolve_target(sheet_record)
+            if candidate_path:
+                return candidate_path, available_names
+        return None, available_names
+
+    return chosen_path, available_names
 
 
 def _read_sheet_rows(zip_file, sheet_path, shared_strings):
