@@ -85,7 +85,11 @@ def _normalize_sheet_name(name):
 
 
 def _get_sheet_entries(zip_file):
-    """Получение списка всех листов с путями к файлам worksheet."""
+    """Получение списка всех листов с путями к файлам worksheet.
+
+    При отсутствии рабочей таблицы связей пытаемся использовать стандартные
+    пути вида ``xl/worksheets/sheet{N}.xml``.
+    """
 
     rels_ns = {
         "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
@@ -127,10 +131,17 @@ def _get_sheet_entries(zip_file):
         return "xl/" + target if not target.startswith("xl/") else target
 
     entries = []
-    for sheet_record in sheets_raw:
+    zip_names = set(zip_file.namelist())
+    for index, sheet_record in enumerate(sheets_raw, start=1):
         resolved = _resolve_target(sheet_record)
         if resolved:
             entries.append((sheet_record[0], resolved))
+            continue
+
+        # Если отношения не заданы, пробуем стандартный путь sheet{N}.xml
+        fallback_path = "xl/worksheets/sheet{0}.xml".format(index)
+        if fallback_path in zip_names:
+            entries.append((sheet_record[0], fallback_path))
 
     available_names = [name for name, _ in sheets_raw]
     return entries, available_names
