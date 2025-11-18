@@ -37,6 +37,20 @@ VOLUME_PARAMS = {
 }
 
 
+def _h(value):
+    """Экранирование HTML для безопасного вывода."""
+
+    if value is None:
+        return u""
+    text = _t(value)
+    return (
+        text.replace(u"&", u"&amp;")
+        .replace(u"<", u"&lt;")
+        .replace(u">", u"&gt;")
+        .replace(u'"', u"&quot;")
+    )
+
+
 def _t(value):
     try:
         return unicode(value)  # type: ignore[name-defined]
@@ -155,22 +169,59 @@ def _get_volume_value(wall, rule):
 def _calc_code_fragment(rule, volume_value):
     multiplier = rule.multiplier or 1.0
     volume_param = rule.volume_param or u""
-    return u"{0}[{1}/{2}]".format(rule.gesn_code, volume_param, int(multiplier) if multiplier.is_integer() else multiplier)
+    return u"{0}[{1}/{2}]".format(
+        rule.gesn_code,
+        volume_param,
+        int(multiplier) if multiplier.is_integer() else multiplier,
+    )
+
+
+def _format_rule_result(rule, volume_value, unit_label):
+    """Формирование строки для отчёта с объёмом."""
+
+    multiplier = rule.multiplier or 1.0
+    normalized = volume_value / multiplier if multiplier else volume_value
+    volume_param = rule.volume_param or u""
+    parts = [
+        u"{0} — {1}: {2:.3f} {3}".format(
+            rule.gesn_code,
+            volume_param,
+            volume_value,
+            unit_label or u"",
+        )
+    ]
+    parts.append(u"кратность: {0}".format(int(multiplier) if multiplier.is_integer() else multiplier))
+    parts.append(u"объём для ГЭСН: {0:.3f}".format(normalized))
+    return u"; ".join(parts)
 
 
 def _process_wall(wall, rules):
     """Обработка одной стены и запись результата/причины в параметр."""
 
+    entry = {
+        "id": getattr(getattr(wall, "Id", None), "IntegerValue", None),
+        "cat": _t(getattr(getattr(wall, "Category", None), "Name", u"")),
+        "type": None,
+        "family": None,
+        "message": None,
+        "matched": False,
+    }
+
     target_param = _get_writable_param(wall, PARAM_GESN_OUTPUT)
 
     if not target_param:
         # Даже причину записать некуда
-        return False, False, u"Нет доступного параметра для записи"
+        entry["message"] = u"Нет доступного параметра для записи"
+        return False, False, entry
 
     wall_type = _get_type(wall)
     if wall_type is None:
         reason = u"Не удалось определить тип стены"
-        return target_param.Set(reason), False, reason
+        entry["message"] = reason
+        return target_param.Set(reason), False, entry
+
+    entry["type"] = _t(getattr(wall_type, "Name", u""))
+    entry["family"] = _t(getattr(wall_type, "FamilyName", u""))
 
     thickness_mm = _get_thickness_mm(wall_type)
     height_mm = _get_height_mm(wall)
@@ -180,22 +231,28 @@ def _process_wall(wall, rules):
     matched_rules = _match_rules(wall, rules, thickness_mm, height_mm, reinforcement_text, brick_size)
     if not matched_rules:
         reason = u"Нет подходящей записи в БД"
-        return target_param.Set(reason), False, reason
+        entry["message"] = reason
+        return target_param.Set(reason), False, entry
 
-    fragments = []
+    fragments_for_param = []
+    fragments_for_report = []
     last_volume_issue = None
     for rule in matched_rules:
         volume_value, unit_label = _get_volume_value(wall, rule)
         if volume_value is None:
             last_volume_issue = u"Не найден параметр объёма: {0}".format(rule.volume_param or u"?")
             continue
-        fragments.append(_calc_code_fragment(rule, volume_value))
+        fragments_for_param.append(_calc_code_fragment(rule, volume_value))
+        fragments_for_report.append(_format_rule_result(rule, volume_value, unit_label))
 
-    if not fragments:
+    if not fragments_for_param:
         reason = last_volume_issue or u"Не удалось вычислить объём"
-        return target_param.Set(reason), False, reason
+        entry["message"] = reason
+        return target_param.Set(reason), False, entry
 
-    return target_param.Set(u"; ".join(fragments)), True, None
+    entry["matched"] = True
+    entry["message"] = u"; ".join(fragments_for_report)
+    return target_param.Set(u"; ".join(fragments_for_param)), True, entry
 
 
 def _collect_walls():
@@ -227,16 +284,18 @@ def main():
     processed = 0
     updated = 0
     matched = 0
+    entries = []
 
     with revit.Transaction(u"ТАРТИП: определить ГЭСН"):
         for wall in walls:
-            ok, has_match, reason = _process_wall(wall, rules)
+            ok, has_match, entry = _process_wall(wall, rules)
+            entries.append(entry)
             if ok:
                 processed += 1
                 if has_match:
                     matched += 1
                     updated += 1
-                elif config.CLEAR_CODE_WHEN_MISS and not reason:
+                elif config.CLEAR_CODE_WHEN_MISS and not entry.get("matched"):
                     param = _get_writable_param(wall, PARAM_GESN_OUTPUT)
                     if param:
                         param.Set(u"")
@@ -249,6 +308,47 @@ def main():
             processed, updated, not_matched
         )
     )
+
+    # Выводим перечень элементов с найденными работами или причинами отсутствия
+    try:
+        out.clear()
+    except Exception:
+        pass
+
+    rows = []
+    for entry in entries:
+        link = (
+            out.linkify(DB.ElementId(entry["id"]), u"{}".format(entry["id"]))
+            if entry.get("id") is not None
+            else u""
+        )
+        rows.append(
+            [
+                link,
+                _h(entry.get("cat") or u""),
+                _h(entry.get("family") or u""),
+                _h(entry.get("type") or u""),
+                _h(entry.get("message") or u""),
+            ]
+        )
+
+    if rows:
+        header = [u"ID", u"Категория", u"Семейство", u"Тип", u"Результат"]
+        css = (
+            u"<style>table.acbd{border-collapse:collapse;width:100%;margin:6px 0;}"
+            u"table.acbd th,table.acbd td{border:1px solid #d0d0d0;padding:4px 6px;}"
+            u"table.acbd thead th{background:#f6f6f6;position:sticky;top:0;}</style>"
+        )
+        table_html = [css, u"<table class='acbd'>", u"<thead><tr>"]
+        for h in header:
+            table_html.append(u"<th>{0}</th>".format(_h(h)))
+        table_html.append(u"</tr></thead><tbody>")
+        for r in rows:
+            table_html.append(u"<tr>{}</tr>".format(u"".join(u"<td>{}</td>".format(c) for c in r)))
+        table_html.append(u"</tbody></table>")
+        out.print_html(u"".join(table_html))
+    else:
+        out.print_html(u"<p>Нет обработанных стен для отображения.</p>")
 
 
 if __name__ == "__main__":
