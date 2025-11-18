@@ -20,7 +20,8 @@ from lib import config  # noqa: E402
 # Имена используемых параметров
 PARAM_REINFORCEMENT = u"Армирование"
 PARAM_BRICK_SIZE = u"Размеры кирпича"
-PARAM_GESN_CODE = u"Шифр ГЭСН"
+# Параметры для вывода результата: сначала приоритетный, затем совместимый резервный
+PARAM_GESN_OUTPUT = [u"ACBD_ГЭСН", u"Шифр ГЭСН"]
 
 # Внутренние системные параметры
 PARAM_UNCONNECTED_HEIGHT = DB.BuiltInParameter.WALL_USER_HEIGHT_PARAM
@@ -34,6 +35,20 @@ VOLUME_PARAMS = {
     u"Площадь": DB.BuiltInParameter.HOST_AREA_COMPUTED,
     u"Объем": DB.BuiltInParameter.HOST_VOLUME_COMPUTED,
 }
+
+
+def _h(value):
+    """Экранирование HTML для безопасного вывода."""
+
+    if value is None:
+        return u""
+    text = _t(value)
+    return (
+        text.replace(u"&", u"&amp;")
+        .replace(u"<", u"&lt;")
+        .replace(u">", u"&gt;")
+        .replace(u'"', u"&quot;")
+    )
 
 
 def _t(value):
@@ -97,6 +112,16 @@ def _prepare_rules():
     return load_rules_from_excel()
 
 
+def _get_writable_param(element, names):
+    """Возвращает первый доступный параметр из списка имен."""
+
+    for name in names:
+        param = element.LookupParameter(name)
+        if param and not param.IsReadOnly:
+            return param
+    return None
+
+
 def _match_rules(wall, rules, thickness_mm, height_mm, reinforcement_text, brick_size):
     wall_type = _get_type(wall)
     # Защищаем получение имен типа и семейства от отсутствующих свойств
@@ -144,13 +169,59 @@ def _get_volume_value(wall, rule):
 def _calc_code_fragment(rule, volume_value):
     multiplier = rule.multiplier or 1.0
     volume_param = rule.volume_param or u""
-    return u"{0}[{1}/{2}]".format(rule.gesn_code, volume_param, int(multiplier) if multiplier.is_integer() else multiplier)
+    return u"{0}[{1}/{2}]".format(
+        rule.gesn_code,
+        volume_param,
+        int(multiplier) if multiplier.is_integer() else multiplier,
+    )
+
+
+def _format_rule_result(rule, volume_value, unit_label):
+    """Формирование строки для отчёта с объёмом."""
+
+    multiplier = rule.multiplier or 1.0
+    normalized = volume_value / multiplier if multiplier else volume_value
+    volume_param = rule.volume_param or u""
+    parts = [
+        u"{0} — {1}: {2:.3f} {3}".format(
+            rule.gesn_code,
+            volume_param,
+            volume_value,
+            unit_label or u"",
+        )
+    ]
+    parts.append(u"кратность: {0}".format(int(multiplier) if multiplier.is_integer() else multiplier))
+    parts.append(u"объём для ГЭСН: {0:.3f}".format(normalized))
+    return u"; ".join(parts)
 
 
 def _process_wall(wall, rules):
+    """Обработка одной стены и запись результата/причины в параметр."""
+
+    entry = {
+        "id": getattr(getattr(wall, "Id", None), "IntegerValue", None),
+        "cat": _t(getattr(getattr(wall, "Category", None), "Name", u"")),
+        "type": None,
+        "family": None,
+        "message": None,
+        "matched": False,
+    }
+
+    target_param = _get_writable_param(wall, PARAM_GESN_OUTPUT)
+
+    if not target_param:
+        # Даже причину записать некуда
+        entry["message"] = u"Нет доступного параметра для записи"
+        return False, False, entry
+
     wall_type = _get_type(wall)
     if wall_type is None:
-        return False, False
+        reason = u"Не удалось определить тип стены"
+        entry["message"] = reason
+        return target_param.Set(reason), False, entry
+
+    entry["type"] = _t(getattr(wall_type, "Name", u""))
+    entry["family"] = _t(getattr(wall_type, "FamilyName", u""))
 
     thickness_mm = _get_thickness_mm(wall_type)
     height_mm = _get_height_mm(wall)
@@ -159,23 +230,29 @@ def _process_wall(wall, rules):
 
     matched_rules = _match_rules(wall, rules, thickness_mm, height_mm, reinforcement_text, brick_size)
     if not matched_rules:
-        return True, False
+        reason = u"Нет подходящей записи в БД"
+        entry["message"] = reason
+        return target_param.Set(reason), False, entry
 
-    fragments = []
+    fragments_for_param = []
+    fragments_for_report = []
+    last_volume_issue = None
     for rule in matched_rules:
         volume_value, unit_label = _get_volume_value(wall, rule)
         if volume_value is None:
+            last_volume_issue = u"Не найден параметр объёма: {0}".format(rule.volume_param or u"?")
             continue
-        fragments.append(_calc_code_fragment(rule, volume_value))
+        fragments_for_param.append(_calc_code_fragment(rule, volume_value))
+        fragments_for_report.append(_format_rule_result(rule, volume_value, unit_label))
 
-    if not fragments:
-        return True, False
+    if not fragments_for_param:
+        reason = last_volume_issue or u"Не удалось вычислить объём"
+        entry["message"] = reason
+        return target_param.Set(reason), False, entry
 
-    target_param = wall.LookupParameter(PARAM_GESN_CODE)
-    if not target_param or target_param.IsReadOnly:
-        return False, False
-
-    return target_param.Set(u"; ".join(fragments)), True
+    entry["matched"] = True
+    entry["message"] = u"; ".join(fragments_for_report)
+    return target_param.Set(u"; ".join(fragments_for_param)), True, entry
 
 
 def _collect_walls():
@@ -207,18 +284,20 @@ def main():
     processed = 0
     updated = 0
     matched = 0
+    entries = []
 
     with revit.Transaction(u"ТАРТИП: определить ГЭСН"):
         for wall in walls:
-            ok, has_match = _process_wall(wall, rules)
+            ok, has_match, entry = _process_wall(wall, rules)
+            entries.append(entry)
             if ok:
                 processed += 1
                 if has_match:
                     matched += 1
                     updated += 1
-                elif config.CLEAR_CODE_WHEN_MISS:
-                    param = wall.LookupParameter(PARAM_GESN_CODE)
-                    if param and not param.IsReadOnly:
+                elif config.CLEAR_CODE_WHEN_MISS and not entry.get("matched"):
+                    param = _get_writable_param(wall, PARAM_GESN_OUTPUT)
+                    if param:
                         param.Set(u"")
             else:
                 out.print_html(u"Не удалось обновить стену: {0}".format(_t(wall)))
@@ -229,6 +308,47 @@ def main():
             processed, updated, not_matched
         )
     )
+
+    # Выводим перечень элементов с найденными работами или причинами отсутствия
+    try:
+        out.clear()
+    except Exception:
+        pass
+
+    rows = []
+    for entry in entries:
+        link = (
+            out.linkify(DB.ElementId(entry["id"]), u"{}".format(entry["id"]))
+            if entry.get("id") is not None
+            else u""
+        )
+        rows.append(
+            [
+                link,
+                _h(entry.get("cat") or u""),
+                _h(entry.get("family") or u""),
+                _h(entry.get("type") or u""),
+                _h(entry.get("message") or u""),
+            ]
+        )
+
+    if rows:
+        header = [u"ID", u"Категория", u"Семейство", u"Тип", u"Результат"]
+        css = (
+            u"<style>table.acbd{border-collapse:collapse;width:100%;margin:6px 0;}"
+            u"table.acbd th,table.acbd td{border:1px solid #d0d0d0;padding:4px 6px;}"
+            u"table.acbd thead th{background:#f6f6f6;position:sticky;top:0;}</style>"
+        )
+        table_html = [css, u"<table class='acbd'>", u"<thead><tr>"]
+        for h in header:
+            table_html.append(u"<th>{0}</th>".format(_h(h)))
+        table_html.append(u"</tr></thead><tbody>")
+        for r in rows:
+            table_html.append(u"<tr>{}</tr>".format(u"".join(u"<td>{}</td>".format(c) for c in r)))
+        table_html.append(u"</tbody></table>")
+        out.print_html(u"".join(table_html))
+    else:
+        out.print_html(u"<p>Нет обработанных стен для отображения.</p>")
 
 
 if __name__ == "__main__":
