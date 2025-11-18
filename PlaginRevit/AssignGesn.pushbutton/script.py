@@ -122,12 +122,63 @@ def _get_writable_param(element, names):
     return None
 
 
-def _match_rules(wall, rules, thickness_mm, height_mm, reinforcement_text, brick_size):
-    wall_type = _get_type(wall)
-    # Защищаем получение имен типа и семейства от отсутствующих свойств
-    family_name = _t(getattr(wall_type, "FamilyName", u""))
-    type_name = _t(getattr(wall_type, "Name", u""))
+def _resolve_type_info(wall):
+    """Получает тип стены и гарантирует ненулевые имена семейства и типа."""
 
+    wall_type = _get_type(wall)
+    if wall_type is None:
+        return None, u"(тип не определён)", u"(семейство не определено)"
+
+    type_name = _t(getattr(wall_type, "Name", u""))
+    if not type_name:
+        param = wall_type.get_Parameter(DB.BuiltInParameter.SYMBOL_NAME_PARAM)
+        if param:
+            try:
+                type_name = _t(param.AsString() or param.AsValueString())
+            except Exception:
+                type_name = u""
+    if not type_name:
+        type_name = u"(без имени)"
+
+    family_name = _t(getattr(wall_type, "FamilyName", u""))
+    if not family_name:
+        try:
+            family_name = _t(getattr(getattr(wall_type, "Family", None), "Name", u""))
+        except Exception:
+            family_name = u""
+    if not family_name:
+        family_name = u"(без семейства)"
+
+    return wall_type, family_name, type_name
+
+
+def _value_matches_conditions(value, conditions):
+    """Проверяет значение по списку (оператор, число)."""
+
+    if value is None:
+        return False
+
+    for op, limit in conditions:
+        if op == ">" and not (value > limit):
+            return False
+        if op == ">=" and not (value >= limit):
+            return False
+        if op == "<" and not (value < limit):
+            return False
+        if op == "<=" and not (value <= limit):
+            return False
+        if op == "=" and not (abs(value - limit) <= 1e-6):
+            return False
+    return True
+
+
+def _height_matches(rule, height_mm):
+    if rule.height_conditions:
+        return _value_matches_conditions(height_mm, rule.height_conditions)
+    return rule.height_min_mm <= height_mm <= rule.height_max_mm
+
+
+def _match_rules(rules, family_name, type_name, thickness_mm, height_mm, reinforcement_text, brick_size):
     matched = []
     for rule in rules:
         if rule.family and rule.family != family_name:
@@ -136,7 +187,7 @@ def _match_rules(wall, rules, thickness_mm, height_mm, reinforcement_text, brick
             continue
         if abs(rule.thickness_mm - thickness_mm) > config.THICKNESS_TOLERANCE_MM:
             continue
-        if not (rule.height_min_mm <= height_mm <= rule.height_max_mm):
+        if not _height_matches(rule, height_mm):
             continue
         if rule.reinforcement and rule.reinforcement != reinforcement_text:
             continue
@@ -144,6 +195,75 @@ def _match_rules(wall, rules, thickness_mm, height_mm, reinforcement_text, brick
             continue
         matched.append(rule)
     return matched
+
+
+def _explain_no_match(rules, family_name, type_name, thickness_mm, height_mm, reinforcement_text, brick_size):
+    """Формирует человекочитаемую причину отсутствия совпадений."""
+
+    stage_rules = list(rules)
+    if not stage_rules:
+        return u"Нет записей в БД (правила отсутствуют)"
+
+    reasons = []
+
+    family_rules = [r for r in stage_rules if not r.family or r.family == family_name]
+    if not family_rules:
+        reasons.append(u"семейство: {0}".format(family_name or u"(пусто)"))
+    else:
+        stage_rules = family_rules
+
+    type_rules = [r for r in stage_rules if not r.type_name or r.type_name == type_name]
+    if not type_rules:
+        reasons.append(u"тип: {0}".format(type_name or u"(пусто)"))
+    else:
+        stage_rules = type_rules
+
+    thickness_rules = [r for r in stage_rules if abs(r.thickness_mm - thickness_mm) <= config.THICKNESS_TOLERANCE_MM]
+    if not thickness_rules:
+        reasons.append(u"толщина: {0:.1f} мм".format(thickness_mm))
+    else:
+        stage_rules = thickness_rules
+
+    height_rules = [r for r in stage_rules if _height_matches(r, height_mm)]
+    if not height_rules:
+        expected = u", ".join(
+            filter(
+                None,
+                [
+                    getattr(r, "height_label", u"")
+                    or u"{0:.1f}-{1:.1f} мм".format(
+                        r.height_min_mm,
+                        r.height_max_mm,
+                    )
+                    for r in stage_rules
+                ],
+            )
+        )
+        reasons.append(
+            u"высота {0:.1f} мм не соответствует ({1})".format(
+                height_mm,
+                expected or u"ожидание не задано",
+            )
+        )
+    else:
+        stage_rules = height_rules
+
+    norm_reinf = reinforcement_text or u""
+    reinf_rules = [r for r in stage_rules if not r.reinforcement or r.reinforcement == norm_reinf]
+    if not reinf_rules:
+        reasons.append(u"армирование: {0}".format(norm_reinf or u"(пусто)"))
+    else:
+        stage_rules = reinf_rules
+
+    norm_brick = brick_size or u""
+    brick_rules = [r for r in stage_rules if not r.brick_size or r.brick_size == norm_brick]
+    if not brick_rules:
+        reasons.append(u"размеры кирпича: {0}".format(norm_brick or u"(пусто)"))
+
+    if not reasons:
+        return u"Нет подходящей записи в БД"
+
+    return u"Нет записей в БД ({0})".format(u"; ".join(reasons))
 
 
 def _get_volume_value(wall, rule):
@@ -192,6 +312,8 @@ def _format_rule_result(rule, volume_value, unit_label):
     ]
     parts.append(u"кратность: {0}".format(int(multiplier) if multiplier.is_integer() else multiplier))
     parts.append(u"объём для ГЭСН: {0:.3f}".format(normalized))
+    if getattr(rule, "volume_label", u""):
+        parts.append(u"условие объёма: {0}".format(rule.volume_label))
     return u"; ".join(parts)
 
 
@@ -214,23 +336,39 @@ def _process_wall(wall, rules):
         entry["message"] = u"Нет доступного параметра для записи"
         return False, False, entry
 
-    wall_type = _get_type(wall)
+    wall_type, family_name, type_name = _resolve_type_info(wall)
+    entry["type"] = type_name
+    entry["family"] = family_name
+
     if wall_type is None:
         reason = u"Не удалось определить тип стены"
         entry["message"] = reason
         return target_param.Set(reason), False, entry
-
-    entry["type"] = _t(getattr(wall_type, "Name", u""))
-    entry["family"] = _t(getattr(wall_type, "FamilyName", u""))
 
     thickness_mm = _get_thickness_mm(wall_type)
     height_mm = _get_height_mm(wall)
     reinforcement_text = _normalize_bool_text(_get_parameter_value(wall, PARAM_REINFORCEMENT))
     brick_size = _t(_get_parameter_value(wall, PARAM_BRICK_SIZE))
 
-    matched_rules = _match_rules(wall, rules, thickness_mm, height_mm, reinforcement_text, brick_size)
+    matched_rules = _match_rules(
+        rules,
+        family_name,
+        type_name,
+        thickness_mm,
+        height_mm,
+        reinforcement_text,
+        brick_size,
+    )
     if not matched_rules:
-        reason = u"Нет подходящей записи в БД"
+        reason = _explain_no_match(
+            rules,
+            entry["family"],
+            entry["type"],
+            thickness_mm,
+            height_mm,
+            reinforcement_text,
+            brick_size,
+        )
         entry["message"] = reason
         return target_param.Set(reason), False, entry
 
@@ -241,6 +379,10 @@ def _process_wall(wall, rules):
         volume_value, unit_label = _get_volume_value(wall, rule)
         if volume_value is None:
             last_volume_issue = u"Не найден параметр объёма: {0}".format(rule.volume_param or u"?")
+            continue
+        if rule.volume_conditions and not _value_matches_conditions(volume_value, rule.volume_conditions):
+            expected = rule.volume_label or u"условие объёма не задано"
+            last_volume_issue = u"Объём {0:.3f} не попадает в диапазон ({1})".format(volume_value, expected)
             continue
         fragments_for_param.append(_calc_code_fragment(rule, volume_value))
         fragments_for_report.append(_format_rule_result(rule, volume_value, unit_label))
@@ -303,10 +445,10 @@ def main():
                 out.print_html(u"Не удалось обновить стену: {0}".format(_t(wall)))
 
     not_matched = processed - matched
-    forms.alert(
-        u"Обработано стен: {0}\nОбновлено ГЭСН: {1}\nБез подходящей записи: {2}".format(
-            processed, updated, not_matched
-        )
+    summary_text = u"Обработано стен: {0}. Обновлено ГЭСН: {1}. Без подходящей записи: {2}.".format(
+        processed,
+        updated,
+        not_matched,
     )
 
     # Выводим перечень элементов с найденными работами или причинами отсутствия
@@ -314,6 +456,8 @@ def main():
         out.clear()
     except Exception:
         pass
+
+    out.print_html(u"<p><b>{0}</b></p>".format(_h(summary_text)))
 
     rows = []
     for entry in entries:
@@ -335,9 +479,9 @@ def main():
     if rows:
         header = [u"ID", u"Категория", u"Семейство", u"Тип", u"Результат"]
         css = (
-            u"<style>table.acbd{border-collapse:collapse;width:100%;margin:6px 0;}"
+            u"<style>table.acbd{border-collapse:collapse;width:100%;margin:6px 0;color:#222;}"
             u"table.acbd th,table.acbd td{border:1px solid #d0d0d0;padding:4px 6px;}"
-            u"table.acbd thead th{background:#f6f6f6;position:sticky;top:0;}</style>"
+            u"table.acbd thead th{background:#e6e6e6;color:#101010;position:sticky;top:0;}</style>"
         )
         table_html = [css, u"<table class='acbd'>", u"<thead><tr>"]
         for h in header:

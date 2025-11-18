@@ -22,6 +22,10 @@ GesnRule = namedtuple(
         "unit_raw",
         "multiplier",
         "volume_param",
+        "height_conditions",
+        "volume_conditions",
+        "height_label",
+        "volume_label",
     ],
 )
 
@@ -52,6 +56,68 @@ def _normalize_bool_text(value):
     if not text:
         return u""
     return u"да" if text in {u"да", u"yes", u"1", u"true", u"истина"} else u"нет"
+
+
+def _parse_conditions(raw_value, default_operator=None):
+    """Парсинг строковых условий вида ">1000&<=2000" в список (op, number)."""
+
+    text = _as_text(raw_value)
+    if text is None:
+        return [], u""
+
+    cleaned = text.replace(" ", "").replace("*", "&").replace(",", ".")
+    parts = re.split(r"[&;|]+", cleaned)
+
+    conditions = []
+    labels = []
+    for part in parts:
+        if not part:
+            continue
+        match = re.match(r"(<=|>=|<|>|=)?([-+]?[0-9]*\.?[0-9]+)", part)
+        if not match:
+            continue
+        op = match.group(1) or default_operator or "="
+        num = _as_float(match.group(2))
+        if num is None:
+            continue
+        conditions.append((op, num))
+        labels.append(u"{0}{1}".format(op, num))
+
+    return conditions, u" & ".join(labels)
+
+
+def _build_height_conditions(raw_min, raw_max):
+    """Собирает условия высоты из отдельных ячеек минимального/максимального значения."""
+
+    conditions = []
+    labels = []
+
+    min_conditions, min_label = _parse_conditions(raw_min, default_operator=">=")
+    max_conditions, max_label = _parse_conditions(raw_max, default_operator="<=")
+
+    conditions.extend(min_conditions)
+    conditions.extend(max_conditions)
+
+    if min_label:
+        labels.append(min_label)
+    if max_label:
+        labels.append(max_label)
+
+    return conditions, u" & ".join(labels)
+
+
+def _first_number(raw_value, fallback=None):
+    """Пытается извлечь первое число для обратной совместимости."""
+
+    direct = _as_float(raw_value)
+    if direct is not None:
+        return direct
+
+    conditions, _ = _parse_conditions(raw_value)
+    if conditions:
+        return conditions[0][1]
+
+    return fallback
 
 
 def _load_shared_strings(zip_file):
@@ -252,23 +318,46 @@ def load_rules_from_excel(path=None, sheet_name=None):
                 return None
             return row[idx]
 
+        volume_cond_column = None
+        for candidate in [u"Объем_условие", u"Объем", u"Volume_condition", u"VolumeRange"]:
+            if candidate in header_map:
+                volume_cond_column = candidate
+                break
+
         for row in rows[1:]:
             gesn_code = _as_text(get_cell(row, u"ГЭСН_код"))
             if not gesn_code:
                 continue
 
+            raw_height_min = get_cell(row, u"Height_min_mm")
+            raw_height_max = get_cell(row, u"Height_max_mm")
+            height_conditions, height_label = _build_height_conditions(
+                raw_height_min, raw_height_max
+            )
+
+            volume_conditions = []
+            volume_label = u""
+            if volume_cond_column:
+                volume_conditions, volume_label = _parse_conditions(
+                    get_cell(row, volume_cond_column)
+                )
+
             rule = GesnRule(
                 family=_as_text(get_cell(row, u"Family")) or u"",
                 type_name=_as_text(get_cell(row, u"TypeName")) or u"",
                 thickness_mm=_as_float(get_cell(row, u"Thickness_mm")) or 0.0,
-                height_min_mm=_as_float(get_cell(row, u"Height_min_mm")) or 0.0,
-                height_max_mm=_as_float(get_cell(row, u"Height_max_mm")) or 0.0,
+                height_min_mm=_first_number(raw_height_min, 0.0) or 0.0,
+                height_max_mm=_first_number(raw_height_max, 0.0) or 0.0,
                 reinforcement=_normalize_bool_text(get_cell(row, u"Армирование")),
                 brick_size=_as_text(get_cell(row, u"Размеры кирпича")) or u"",
                 gesn_code=gesn_code,
                 unit_raw=_as_text(get_cell(row, u"ЕдИзм")) or u"",
                 multiplier=_as_float(get_cell(row, u"Кратность")) or 1.0,
                 volume_param=_as_text(get_cell(row, u"Параметр_объёма")) or u"",
+                height_conditions=height_conditions,
+                volume_conditions=volume_conditions,
+                height_label=height_label,
+                volume_label=volume_label,
             )
             rules.append(rule)
 
