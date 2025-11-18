@@ -159,9 +159,18 @@ def _calc_code_fragment(rule, volume_value):
 
 
 def _process_wall(wall, rules):
+    """Обработка одной стены и запись результата/причины в параметр."""
+
+    target_param = _get_writable_param(wall, PARAM_GESN_OUTPUT)
+
+    if not target_param:
+        # Даже причину записать некуда
+        return False, False, u"Нет доступного параметра для записи"
+
     wall_type = _get_type(wall)
     if wall_type is None:
-        return False, False
+        reason = u"Не удалось определить тип стены"
+        return target_param.Set(reason), False, reason
 
     thickness_mm = _get_thickness_mm(wall_type)
     height_mm = _get_height_mm(wall)
@@ -170,23 +179,23 @@ def _process_wall(wall, rules):
 
     matched_rules = _match_rules(wall, rules, thickness_mm, height_mm, reinforcement_text, brick_size)
     if not matched_rules:
-        return True, False
+        reason = u"Нет подходящей записи в БД"
+        return target_param.Set(reason), False, reason
 
     fragments = []
+    last_volume_issue = None
     for rule in matched_rules:
         volume_value, unit_label = _get_volume_value(wall, rule)
         if volume_value is None:
+            last_volume_issue = u"Не найден параметр объёма: {0}".format(rule.volume_param or u"?")
             continue
         fragments.append(_calc_code_fragment(rule, volume_value))
 
     if not fragments:
-        return True, False
+        reason = last_volume_issue or u"Не удалось вычислить объём"
+        return target_param.Set(reason), False, reason
 
-    target_param = _get_writable_param(wall, PARAM_GESN_OUTPUT)
-    if not target_param:
-        return False, False
-
-    return target_param.Set(u"; ".join(fragments)), True
+    return target_param.Set(u"; ".join(fragments)), True, None
 
 
 def _collect_walls():
@@ -221,13 +230,13 @@ def main():
 
     with revit.Transaction(u"ТАРТИП: определить ГЭСН"):
         for wall in walls:
-            ok, has_match = _process_wall(wall, rules)
+            ok, has_match, reason = _process_wall(wall, rules)
             if ok:
                 processed += 1
                 if has_match:
                     matched += 1
                     updated += 1
-                elif config.CLEAR_CODE_WHEN_MISS:
+                elif config.CLEAR_CODE_WHEN_MISS and not reason:
                     param = _get_writable_param(wall, PARAM_GESN_OUTPUT)
                     if param:
                         param.Set(u"")
