@@ -122,12 +122,37 @@ def _get_writable_param(element, names):
     return None
 
 
-def _match_rules(wall, rules, thickness_mm, height_mm, reinforcement_text, brick_size):
-    wall_type = _get_type(wall)
-    # Защищаем получение имен типа и семейства от отсутствующих свойств
-    family_name = _t(getattr(wall_type, "FamilyName", u""))
-    type_name = _t(getattr(wall_type, "Name", u""))
+def _resolve_type_info(wall):
+    """Получает тип стены и гарантирует ненулевые имена семейства и типа."""
 
+    wall_type = _get_type(wall)
+    if wall_type is None:
+        return None, u"(тип не определён)", u"(семейство не определено)"
+
+    type_name = _t(getattr(wall_type, "Name", u""))
+    if not type_name:
+        param = wall_type.get_Parameter(DB.BuiltInParameter.SYMBOL_NAME_PARAM)
+        if param:
+            try:
+                type_name = _t(param.AsString() or param.AsValueString())
+            except Exception:
+                type_name = u""
+    if not type_name:
+        type_name = u"(без имени)"
+
+    family_name = _t(getattr(wall_type, "FamilyName", u""))
+    if not family_name:
+        try:
+            family_name = _t(getattr(getattr(wall_type, "Family", None), "Name", u""))
+        except Exception:
+            family_name = u""
+    if not family_name:
+        family_name = u"(без семейства)"
+
+    return wall_type, family_name, type_name
+
+
+def _match_rules(rules, family_name, type_name, thickness_mm, height_mm, reinforcement_text, brick_size):
     matched = []
     for rule in rules:
         if rule.family and rule.family != family_name:
@@ -151,7 +176,20 @@ def _explain_no_match(rules, family_name, type_name, thickness_mm, height_mm, re
 
     stage_rules = list(rules)
     if not stage_rules:
-        return u"Нет записей в БД"
+        details = u"; ".join(
+            filter(
+                None,
+                [
+                    u"семейство: {0}".format(family_name or u"?"),
+                    u"тип: {0}".format(type_name or u"?"),
+                    u"толщина: {0:.1f} мм".format(thickness_mm),
+                    u"высота: {0:.1f} мм".format(height_mm),
+                    u"армирование: {0}".format(reinforcement_text or u"(пусто)"),
+                    u"размеры кирпича: {0}".format(brick_size or u"(пусто)"),
+                ],
+            )
+        )
+        return u"Нет записей в БД ({0})".format(details)
 
     stage_rules = [r for r in stage_rules if not r.family or r.family == family_name]
     if not stage_rules:
@@ -250,21 +288,29 @@ def _process_wall(wall, rules):
         entry["message"] = u"Нет доступного параметра для записи"
         return False, False, entry
 
-    wall_type = _get_type(wall)
+    wall_type, family_name, type_name = _resolve_type_info(wall)
+    entry["type"] = type_name
+    entry["family"] = family_name
+
     if wall_type is None:
         reason = u"Не удалось определить тип стены"
         entry["message"] = reason
         return target_param.Set(reason), False, entry
-
-    entry["type"] = _t(getattr(wall_type, "Name", u""))
-    entry["family"] = _t(getattr(wall_type, "FamilyName", u""))
 
     thickness_mm = _get_thickness_mm(wall_type)
     height_mm = _get_height_mm(wall)
     reinforcement_text = _normalize_bool_text(_get_parameter_value(wall, PARAM_REINFORCEMENT))
     brick_size = _t(_get_parameter_value(wall, PARAM_BRICK_SIZE))
 
-    matched_rules = _match_rules(wall, rules, thickness_mm, height_mm, reinforcement_text, brick_size)
+    matched_rules = _match_rules(
+        rules,
+        family_name,
+        type_name,
+        thickness_mm,
+        height_mm,
+        reinforcement_text,
+        brick_size,
+    )
     if not matched_rules:
         reason = _explain_no_match(
             rules,
@@ -381,9 +427,9 @@ def main():
     if rows:
         header = [u"ID", u"Категория", u"Семейство", u"Тип", u"Результат"]
         css = (
-            u"<style>table.acbd{border-collapse:collapse;width:100%;margin:6px 0;}"
+            u"<style>table.acbd{border-collapse:collapse;width:100%;margin:6px 0;color:#222;}"
             u"table.acbd th,table.acbd td{border:1px solid #d0d0d0;padding:4px 6px;}"
-            u"table.acbd thead th{background:#f6f6f6;position:sticky;top:0;}</style>"
+            u"table.acbd thead th{background:#e6e6e6;color:#101010;position:sticky;top:0;}</style>"
         )
         table_html = [css, u"<table class='acbd'>", u"<thead><tr>"]
         for h in header:
