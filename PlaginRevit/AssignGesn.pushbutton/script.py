@@ -152,6 +152,32 @@ def _resolve_type_info(wall):
     return wall_type, family_name, type_name
 
 
+def _value_matches_conditions(value, conditions):
+    """Проверяет значение по списку (оператор, число)."""
+
+    if value is None:
+        return False
+
+    for op, limit in conditions:
+        if op == ">" and not (value > limit):
+            return False
+        if op == ">=" and not (value >= limit):
+            return False
+        if op == "<" and not (value < limit):
+            return False
+        if op == "<=" and not (value <= limit):
+            return False
+        if op == "=" and not (abs(value - limit) <= 1e-6):
+            return False
+    return True
+
+
+def _height_matches(rule, height_mm):
+    if rule.height_conditions:
+        return _value_matches_conditions(height_mm, rule.height_conditions)
+    return rule.height_min_mm <= height_mm <= rule.height_max_mm
+
+
 def _match_rules(rules, family_name, type_name, thickness_mm, height_mm, reinforcement_text, brick_size):
     matched = []
     for rule in rules:
@@ -161,7 +187,7 @@ def _match_rules(rules, family_name, type_name, thickness_mm, height_mm, reinfor
             continue
         if abs(rule.thickness_mm - thickness_mm) > config.THICKNESS_TOLERANCE_MM:
             continue
-        if not (rule.height_min_mm <= height_mm <= rule.height_max_mm):
+        if not _height_matches(rule, height_mm):
             continue
         if rule.reinforcement and rule.reinforcement != reinforcement_text:
             continue
@@ -203,9 +229,23 @@ def _explain_no_match(rules, family_name, type_name, thickness_mm, height_mm, re
     if not stage_rules:
         return u"Нет записей с толщиной: {0:.1f} мм".format(thickness_mm)
 
-    stage_rules = [r for r in stage_rules if r.height_min_mm <= height_mm <= r.height_max_mm]
+    stage_before_height = list(stage_rules)
+    stage_rules = [r for r in stage_rules if _height_matches(r, height_mm)]
     if not stage_rules:
-        return u"Нет записей для высоты: {0:.1f} мм".format(height_mm)
+        expected = u", ".join(
+            filter(
+                None,
+                [
+                    getattr(r, "height_label", u"")
+                    or u"{0:.1f}-{1:.1f} мм".format(
+                        r.height_min_mm,
+                        r.height_max_mm,
+                    )
+                    for r in stage_before_height
+                ],
+            )
+        )
+        return u"Нет записей для высоты: {0:.1f} мм (ожидалось: {1})".format(height_mm, expected or u"условие не задано")
 
     norm_reinf = reinforcement_text or u""
     stage_rules = [r for r in stage_rules if not r.reinforcement or r.reinforcement == norm_reinf]
@@ -266,6 +306,8 @@ def _format_rule_result(rule, volume_value, unit_label):
     ]
     parts.append(u"кратность: {0}".format(int(multiplier) if multiplier.is_integer() else multiplier))
     parts.append(u"объём для ГЭСН: {0:.3f}".format(normalized))
+    if getattr(rule, "volume_label", u""):
+        parts.append(u"условие объёма: {0}".format(rule.volume_label))
     return u"; ".join(parts)
 
 
@@ -331,6 +373,10 @@ def _process_wall(wall, rules):
         volume_value, unit_label = _get_volume_value(wall, rule)
         if volume_value is None:
             last_volume_issue = u"Не найден параметр объёма: {0}".format(rule.volume_param or u"?")
+            continue
+        if rule.volume_conditions and not _value_matches_conditions(volume_value, rule.volume_conditions):
+            expected = rule.volume_label or u"условие объёма не задано"
+            last_volume_issue = u"Объём {0:.3f} не попадает в диапазон ({1})".format(volume_value, expected)
             continue
         fragments_for_param.append(_calc_code_fragment(rule, volume_value))
         fragments_for_report.append(_format_rule_result(rule, volume_value, unit_label))
