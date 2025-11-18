@@ -84,35 +84,43 @@ def _normalize_sheet_name(name):
     return (_as_text(name) or u"").replace(" ", "").replace("_", "").lower()
 
 
-def _get_sheet_path(zip_file, sheet_name):
+def _get_sheet_entries(zip_file):
+    """Получение списка всех листов с путями к файлам worksheet.
+
+    При отсутствии рабочей таблицы связей пытаемся использовать стандартные
+    пути вида ``xl/worksheets/sheet{N}.xml``.
+    """
+
     rels_ns = {
         "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
         "s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
     }
 
-    # Читаем список листов и карту отношений workbook -> worksheet.
     with zip_file.open("xl/workbook.xml") as data:
         wb_tree = ElementTree.parse(data)
-    with zip_file.open("xl/_rels/workbook.xml.rels") as data:
-        rels_tree = ElementTree.parse(data)
 
-    sheets = []
+    try:
+        with zip_file.open("xl/_rels/workbook.xml.rels") as data:
+            rels_tree = ElementTree.parse(data)
+    except KeyError:
+        rels_tree = None
+
+    rels_map = {}
+    if rels_tree:
+        for rel in rels_tree.getroot().iterfind("r:Relationship", rels_ns):
+            rels_map[rel.get("Id")] = rel.get("Target")
+
+    sheets_raw = []
     for sheet in wb_tree.getroot().iterfind("s:sheets/s:sheet", rels_ns):
-        sheets.append(
+        sheets_raw.append(
             (
                 sheet.get("name"),
                 sheet.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"),
             )
         )
 
-    rels_map = {}
-    for rel in rels_tree.getroot().iterfind("r:Relationship", rels_ns):
-        rels_map[rel.get("Id")] = rel.get("Target")
-
-    available_names = [name for name, _ in sheets]
-
     def _resolve_target(sheet_record):
-        name_raw, rel_id = sheet_record
+        _, rel_id = sheet_record
         if not rel_id:
             return None
         target = rels_map.get(rel_id)
@@ -122,36 +130,39 @@ def _get_sheet_path(zip_file, sheet_name):
             target = target[1:]
         return "xl/" + target if not target.startswith("xl/") else target
 
-    # Сначала пытаемся найти точное совпадение, затем совпадение по нормализованным именам.
-    chosen = None
-    for sheet_record in sheets:
-        if sheet_record[0] == sheet_name:
-            chosen = sheet_record
-            break
-    if not chosen:
-        normalized_target = _normalize_sheet_name(sheet_name)
-        for sheet_record in sheets:
-            if _normalize_sheet_name(sheet_record[0]) == normalized_target:
-                chosen = sheet_record
-                break
+    entries = []
+    zip_names = set(zip_file.namelist())
+    for index, sheet_record in enumerate(sheets_raw, start=1):
+        resolved = _resolve_target(sheet_record)
+        if resolved:
+            entries.append((sheet_record[0], resolved))
+            continue
 
-    # Выбираем первый доступный лист, если совпадения не найдены.
-    if not chosen and sheets:
-        chosen = sheets[0]
+        # Если отношения не заданы, пробуем стандартный путь sheet{N}.xml
+        fallback_path = "xl/worksheets/sheet{0}.xml".format(index)
+        if fallback_path in zip_names:
+            entries.append((sheet_record[0], fallback_path))
 
-    if not chosen:
-        return None, available_names
+    available_names = [name for name, _ in sheets_raw]
+    return entries, available_names
 
-    # Пытаемся получить путь к листу, при отсутствии связи используем первый доступный с корректной связью.
-    chosen_path = _resolve_target(chosen)
-    if not chosen_path:
-        for sheet_record in sheets:
-            candidate_path = _resolve_target(sheet_record)
-            if candidate_path:
-                return candidate_path, available_names
-        return None, available_names
 
-    return chosen_path, available_names
+def _order_sheets(entries, preferred_name):
+    """Возвращает листы в порядке: сначала совпадающие с предпочтительным именем."""
+
+    if not preferred_name:
+        return entries
+
+    normalized = _normalize_sheet_name(preferred_name)
+    matched = []
+    other = []
+    for entry in entries:
+        if entry[0] == preferred_name or _normalize_sheet_name(entry[0]) == normalized:
+            matched.append(entry)
+        else:
+            other.append(entry)
+
+    return matched + other
 
 
 def _read_sheet_rows(zip_file, sheet_path, shared_strings):
@@ -186,19 +197,30 @@ def _read_sheet_rows(zip_file, sheet_path, shared_strings):
     return rows
 
 
-def _load_sheet_as_rows(excel_path, sheet_name):
-    """Простое чтение XLSX без внешних зависимостей."""
+def _load_all_sheets_as_rows(excel_path, sheet_name):
+    """Чтение всех листов XLSX без внешних зависимостей."""
+
     with zipfile.ZipFile(excel_path, "r") as zf:
-        sheet_path, available = _get_sheet_path(zf, sheet_name)
-        if not sheet_path:
+        entries, available = _get_sheet_entries(zf)
+        if not entries:
             raise ValueError(
-                u"Лист '{0}' не найден в файле правил. Доступные листы: {1}".format(
-                    sheet_name, u", ".join(available)
+                u"В файле правил нет доступных листов. Найдены имена: {0}".format(
+                    u", ".join(available)
                 )
             )
 
+        ordered_entries = _order_sheets(entries, sheet_name)
         shared_strings = _load_shared_strings(zf)
-        return _read_sheet_rows(zf, sheet_path, shared_strings)
+
+        sheets_rows = []
+        for name, path in ordered_entries:
+            try:
+                rows = _read_sheet_rows(zf, path, shared_strings)
+            except Exception:
+                continue
+            sheets_rows.append((name, rows))
+
+        return sheets_rows
 
 
 def load_rules_from_excel(path=None, sheet_name=None):
@@ -212,38 +234,42 @@ def load_rules_from_excel(path=None, sheet_name=None):
     if not os.path.exists(excel_path):
         raise IOError(u"Файл правил не найден: {0}".format(excel_path))
 
-    rows = _load_sheet_as_rows(excel_path, sheet)
-    if not rows:
-        return []
-
-    header = rows[0]
-    header_map = {name: idx for idx, name in enumerate(header)}
-
-    def get_cell(row, name):
-        idx = header_map.get(name)
-        if idx is None or idx >= len(row):
-            return None
-        return row[idx]
-
+    sheets_rows = _load_all_sheets_as_rows(excel_path, sheet)
     rules = []
-    for row in rows[1:]:
-        gesn_code = _as_text(get_cell(row, u"ГЭСН_код"))
-        if not gesn_code:
+
+    for sheet_name, rows in sheets_rows:
+        if not rows:
             continue
 
-        rule = GesnRule(
-            family=_as_text(get_cell(row, u"Family")) or u"",
-            type_name=_as_text(get_cell(row, u"TypeName")) or u"",
-            thickness_mm=_as_float(get_cell(row, u"Thickness_mm")) or 0.0,
-            height_min_mm=_as_float(get_cell(row, u"Height_min_mm")) or 0.0,
-            height_max_mm=_as_float(get_cell(row, u"Height_max_mm")) or 0.0,
-            reinforcement=_normalize_bool_text(get_cell(row, u"Армирование")),
-            brick_size=_as_text(get_cell(row, u"Размеры кирпича")) or u"",
-            gesn_code=gesn_code,
-            unit_raw=_as_text(get_cell(row, u"ЕдИзм")) or u"",
-            multiplier=_as_float(get_cell(row, u"Кратность")) or 1.0,
-            volume_param=_as_text(get_cell(row, u"Параметр_объёма")) or u"",
-        )
-        rules.append(rule)
+        header = rows[0]
+        header_map = {name: idx for idx, name in enumerate(header)}
+        if u"ГЭСН_код" not in header_map:
+            continue
+
+        def get_cell(row, name):
+            idx = header_map.get(name)
+            if idx is None or idx >= len(row):
+                return None
+            return row[idx]
+
+        for row in rows[1:]:
+            gesn_code = _as_text(get_cell(row, u"ГЭСН_код"))
+            if not gesn_code:
+                continue
+
+            rule = GesnRule(
+                family=_as_text(get_cell(row, u"Family")) or u"",
+                type_name=_as_text(get_cell(row, u"TypeName")) or u"",
+                thickness_mm=_as_float(get_cell(row, u"Thickness_mm")) or 0.0,
+                height_min_mm=_as_float(get_cell(row, u"Height_min_mm")) or 0.0,
+                height_max_mm=_as_float(get_cell(row, u"Height_max_mm")) or 0.0,
+                reinforcement=_normalize_bool_text(get_cell(row, u"Армирование")),
+                brick_size=_as_text(get_cell(row, u"Размеры кирпича")) or u"",
+                gesn_code=gesn_code,
+                unit_raw=_as_text(get_cell(row, u"ЕдИзм")) or u"",
+                multiplier=_as_float(get_cell(row, u"Кратность")) or 1.0,
+                volume_param=_as_text(get_cell(row, u"Параметр_объёма")) or u"",
+            )
+            rules.append(rule)
 
     return rules

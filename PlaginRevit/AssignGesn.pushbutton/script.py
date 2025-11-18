@@ -99,8 +99,9 @@ def _prepare_rules():
 
 def _match_rules(wall, rules, thickness_mm, height_mm, reinforcement_text, brick_size):
     wall_type = _get_type(wall)
-    family_name = _t(wall_type.FamilyName if wall_type else u"")
-    type_name = _t(wall_type.Name if wall_type else u"")
+    # Защищаем получение имен типа и семейства от отсутствующих свойств
+    family_name = _t(getattr(wall_type, "FamilyName", u""))
+    type_name = _t(getattr(wall_type, "Name", u""))
 
     matched = []
     for rule in rules:
