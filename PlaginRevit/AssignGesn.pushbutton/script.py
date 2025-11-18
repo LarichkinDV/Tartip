@@ -90,12 +90,16 @@ def _get_parameter_value(element, param_name):
 
 def _get_height_mm(wall):
     param = wall.get_Parameter(PARAM_UNCONNECTED_HEIGHT)
-    return (param.AsDouble() if param else 0.0) * FEET_TO_MM
+    if not param:
+        return 0.0, False
+    return param.AsDouble() * FEET_TO_MM, True
 
 
 def _get_thickness_mm(wall_type):
     param = wall_type.get_Parameter(PARAM_WIDTH)
-    return (param.AsDouble() if param else 0.0) * FEET_TO_MM
+    if not param:
+        return 0.0, False
+    return param.AsDouble() * FEET_TO_MM, True
 
 
 def _get_type(wall):
@@ -197,12 +201,24 @@ def _match_rules(rules, family_name, type_name, thickness_mm, height_mm, reinfor
     return matched
 
 
-def _explain_no_match(rules, family_name, type_name, thickness_mm, height_mm, reinforcement_text, brick_size):
+def _explain_no_match(
+    rules,
+    family_name,
+    type_name,
+    thickness_mm,
+    height_mm,
+    reinforcement_text,
+    brick_size,
+    thickness_found=True,
+    height_found=True,
+    reinf_found=True,
+    brick_found=True,
+):
     """Формирует человекочитаемую причину отсутствия совпадений."""
 
     stage_rules = list(rules)
     if not stage_rules:
-        return u"Нет записей в БД (правила отсутствуют)"
+        return u"Нет записей в БД (в таблице нет строк с кодами ГЭСН)"
 
     reasons = []
 
@@ -218,47 +234,55 @@ def _explain_no_match(rules, family_name, type_name, thickness_mm, height_mm, re
     else:
         stage_rules = type_rules
 
-    thickness_rules = [r for r in stage_rules if abs(r.thickness_mm - thickness_mm) <= config.THICKNESS_TOLERANCE_MM]
-    if not thickness_rules:
-        reasons.append(u"толщина: {0:.1f} мм".format(thickness_mm))
+    if not thickness_found:
+        reasons.append(u"толщина: параметр не найден")
     else:
-        stage_rules = thickness_rules
+        thickness_rules = [r for r in stage_rules if abs(r.thickness_mm - thickness_mm) <= config.THICKNESS_TOLERANCE_MM]
+        if not thickness_rules:
+            reasons.append(u"толщина: {0:.1f} мм".format(thickness_mm))
+        else:
+            stage_rules = thickness_rules
 
-    height_rules = [r for r in stage_rules if _height_matches(r, height_mm)]
-    if not height_rules:
-        expected = u", ".join(
-            filter(
-                None,
-                [
-                    getattr(r, "height_label", u"")
-                    or u"{0:.1f}-{1:.1f} мм".format(
-                        r.height_min_mm,
-                        r.height_max_mm,
-                    )
-                    for r in stage_rules
-                ],
-            )
-        )
-        reasons.append(
-            u"высота {0:.1f} мм не соответствует ({1})".format(
-                height_mm,
-                expected or u"ожидание не задано",
-            )
-        )
+    if not height_found:
+        reasons.append(u"высота: параметр не найден")
     else:
-        stage_rules = height_rules
+        height_rules = [r for r in stage_rules if _height_matches(r, height_mm)]
+        if not height_rules:
+            expected = u", ".join(
+                filter(
+                    None,
+                    [
+                        getattr(r, "height_label", u"")
+                        or u"{0:.1f}-{1:.1f} мм".format(
+                            r.height_min_mm,
+                            r.height_max_mm,
+                        )
+                        for r in stage_rules
+                    ],
+                )
+            )
+            reasons.append(
+                u"высота {0:.1f} мм не соответствует ({1})".format(
+                    height_mm,
+                    expected or u"ожидание не задано",
+                )
+            )
+        else:
+            stage_rules = height_rules
 
     norm_reinf = reinforcement_text or u""
     reinf_rules = [r for r in stage_rules if not r.reinforcement or r.reinforcement == norm_reinf]
     if not reinf_rules:
-        reasons.append(u"армирование: {0}".format(norm_reinf or u"(пусто)"))
+        msg = u"армирование: {0}".format(norm_reinf or (u"параметр не найден" if not reinf_found else u"(пусто)"))
+        reasons.append(msg)
     else:
         stage_rules = reinf_rules
 
     norm_brick = brick_size or u""
     brick_rules = [r for r in stage_rules if not r.brick_size or r.brick_size == norm_brick]
     if not brick_rules:
-        reasons.append(u"размеры кирпича: {0}".format(norm_brick or u"(пусто)"))
+        msg = u"размеры кирпича: {0}".format(norm_brick or (u"параметр не найден" if not brick_found else u"(пусто)"))
+        reasons.append(msg)
 
     if not reasons:
         return u"Нет подходящей записи в БД"
@@ -317,6 +341,47 @@ def _format_rule_result(rule, volume_value, unit_label):
     return u"; ".join(parts)
 
 
+def _format_input_details(
+    family_name,
+    type_name,
+    thickness_mm,
+    thickness_found,
+    height_mm,
+    height_found,
+    reinforcement_text,
+    reinf_found,
+    brick_size,
+    brick_found,
+):
+    """Формирует строку со статусами исходных параметров."""
+
+    items = []
+    items.append(u"семейство={0}".format(family_name or u"(нет)"))
+    items.append(u"тип={0}".format(type_name or u"(нет)"))
+
+    if thickness_found:
+        items.append(u"толщина={0:.1f} мм".format(thickness_mm))
+    else:
+        items.append(u"толщина=параметр не найден")
+
+    if height_found:
+        items.append(u"высота={0:.1f} мм".format(height_mm))
+    else:
+        items.append(u"высота=параметр не найден")
+
+    if reinf_found:
+        items.append(u"армирование={0}".format(reinforcement_text or u"(пусто)"))
+    else:
+        items.append(u"армирование=параметр не найден")
+
+    if brick_found:
+        items.append(u"размеры кирпича={0}".format(brick_size or u"(пусто)"))
+    else:
+        items.append(u"размеры кирпича=параметр не найден")
+
+    return u"Данные: " + u"; ".join(items)
+
+
 def _process_wall(wall, rules):
     """Обработка одной стены и запись результата/причины в параметр."""
 
@@ -345,10 +410,38 @@ def _process_wall(wall, rules):
         entry["message"] = reason
         return target_param.Set(reason), False, entry
 
-    thickness_mm = _get_thickness_mm(wall_type)
-    height_mm = _get_height_mm(wall)
-    reinforcement_text = _normalize_bool_text(_get_parameter_value(wall, PARAM_REINFORCEMENT))
-    brick_size = _t(_get_parameter_value(wall, PARAM_BRICK_SIZE))
+    thickness_mm, thickness_found = _get_thickness_mm(wall_type)
+    height_mm, height_found = _get_height_mm(wall)
+
+    reinf_param = wall.LookupParameter(PARAM_REINFORCEMENT)
+    reinforcement_text = _normalize_bool_text(_get_parameter_value(wall, PARAM_REINFORCEMENT)) if reinf_param else u""
+    brick_param = wall.LookupParameter(PARAM_BRICK_SIZE)
+    brick_size = _t(_get_parameter_value(wall, PARAM_BRICK_SIZE)) if brick_param else u""
+
+    input_details = _format_input_details(
+        family_name,
+        type_name,
+        thickness_mm,
+        thickness_found,
+        height_mm,
+        height_found,
+        reinforcement_text,
+        bool(reinf_param),
+        brick_size,
+        bool(brick_param),
+    )
+
+    if not thickness_found:
+        reason = u"Не удалось определить толщину типа"
+        full_reason = u"{0} | {1}".format(reason, input_details)
+        entry["message"] = full_reason
+        return target_param.Set(full_reason), False, entry
+
+    if not height_found:
+        reason = u"Не удалось определить высоту стены"
+        full_reason = u"{0} | {1}".format(reason, input_details)
+        entry["message"] = full_reason
+        return target_param.Set(full_reason), False, entry
 
     matched_rules = _match_rules(
         rules,
@@ -368,9 +461,14 @@ def _process_wall(wall, rules):
             height_mm,
             reinforcement_text,
             brick_size,
+            thickness_found=thickness_found,
+            height_found=height_found,
+            reinf_found=bool(reinf_param),
+            brick_found=bool(brick_param),
         )
-        entry["message"] = reason
-        return target_param.Set(reason), False, entry
+        full_reason = u"{0} | {1}".format(reason, input_details)
+        entry["message"] = full_reason
+        return target_param.Set(full_reason), False, entry
 
     fragments_for_param = []
     fragments_for_report = []
@@ -389,11 +487,12 @@ def _process_wall(wall, rules):
 
     if not fragments_for_param:
         reason = last_volume_issue or u"Не удалось вычислить объём"
-        entry["message"] = reason
-        return target_param.Set(reason), False, entry
+        full_reason = u"{0} | {1}".format(reason, input_details)
+        entry["message"] = full_reason
+        return target_param.Set(full_reason), False, entry
 
     entry["matched"] = True
-    entry["message"] = u"; ".join(fragments_for_report)
+    entry["message"] = u"{0} | {1}".format(u"; ".join(fragments_for_report), input_details)
     return target_param.Set(u"; ".join(fragments_for_param)), True, entry
 
 
