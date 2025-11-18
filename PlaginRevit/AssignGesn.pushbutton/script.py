@@ -202,23 +202,30 @@ def _explain_no_match(rules, family_name, type_name, thickness_mm, height_mm, re
 
     stage_rules = list(rules)
     if not stage_rules:
-        return u"Нет записей в БД"
+        return u"Нет записей в БД (правила отсутствуют)"
 
-    stage_rules = [r for r in stage_rules if not r.family or r.family == family_name]
-    if not stage_rules:
-        return u"Нет записей в БД (семейство: {0})".format(family_name or u"?")
+    reasons = []
 
-    stage_rules = [r for r in stage_rules if not r.type_name or r.type_name == type_name]
-    if not stage_rules:
-        return u"Нет записей в БД (тип: {0})".format(type_name or u"?")
+    family_rules = [r for r in stage_rules if not r.family or r.family == family_name]
+    if not family_rules:
+        reasons.append(u"семейство: {0}".format(family_name or u"(пусто)"))
+    else:
+        stage_rules = family_rules
 
-    stage_rules = [r for r in stage_rules if abs(r.thickness_mm - thickness_mm) <= config.THICKNESS_TOLERANCE_MM]
-    if not stage_rules:
-        return u"Нет записей в БД (толщина: {0:.1f} мм)".format(thickness_mm)
+    type_rules = [r for r in stage_rules if not r.type_name or r.type_name == type_name]
+    if not type_rules:
+        reasons.append(u"тип: {0}".format(type_name or u"(пусто)"))
+    else:
+        stage_rules = type_rules
 
-    stage_before_height = list(stage_rules)
-    stage_rules = [r for r in stage_rules if _height_matches(r, height_mm)]
-    if not stage_rules:
+    thickness_rules = [r for r in stage_rules if abs(r.thickness_mm - thickness_mm) <= config.THICKNESS_TOLERANCE_MM]
+    if not thickness_rules:
+        reasons.append(u"толщина: {0:.1f} мм".format(thickness_mm))
+    else:
+        stage_rules = thickness_rules
+
+    height_rules = [r for r in stage_rules if _height_matches(r, height_mm)]
+    if not height_rules:
         expected = u", ".join(
             filter(
                 None,
@@ -228,26 +235,35 @@ def _explain_no_match(rules, family_name, type_name, thickness_mm, height_mm, re
                         r.height_min_mm,
                         r.height_max_mm,
                     )
-                    for r in stage_before_height
+                    for r in stage_rules
                 ],
             )
         )
-        return u"Нет записей в БД (высота: {0:.1f} мм / ожидание: {1})".format(
-            height_mm,
-            expected or u"условие не задано",
+        reasons.append(
+            u"высота {0:.1f} мм не соответствует ({1})".format(
+                height_mm,
+                expected or u"ожидание не задано",
+            )
         )
+    else:
+        stage_rules = height_rules
 
     norm_reinf = reinforcement_text or u""
-    stage_rules = [r for r in stage_rules if not r.reinforcement or r.reinforcement == norm_reinf]
-    if not stage_rules:
-        return u"Нет записей в БД (армирование: {0})".format(norm_reinf or u"(пусто)")
+    reinf_rules = [r for r in stage_rules if not r.reinforcement or r.reinforcement == norm_reinf]
+    if not reinf_rules:
+        reasons.append(u"армирование: {0}".format(norm_reinf or u"(пусто)"))
+    else:
+        stage_rules = reinf_rules
 
     norm_brick = brick_size or u""
-    stage_rules = [r for r in stage_rules if not r.brick_size or r.brick_size == norm_brick]
-    if not stage_rules:
-        return u"Нет записей в БД (размеры кирпича: {0})".format(norm_brick or u"(пусто)")
+    brick_rules = [r for r in stage_rules if not r.brick_size or r.brick_size == norm_brick]
+    if not brick_rules:
+        reasons.append(u"размеры кирпича: {0}".format(norm_brick or u"(пусто)"))
 
-    return u"Нет подходящей записи в БД"
+    if not reasons:
+        return u"Нет подходящей записи в БД"
+
+    return u"Нет записей в БД ({0})".format(u"; ".join(reasons))
 
 
 def _get_volume_value(wall, rule):
