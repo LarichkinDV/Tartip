@@ -398,3 +398,52 @@ def load_rules_from_excel(path=None, sheet_name=None):
             rules.append(rule)
 
     return rules
+
+
+def collect_column_values_from_excel(path=None, sheet_name=None, columns=None):
+    """Возвращает уникальные значения указанных колонок из Excel."""
+
+    if not columns:
+        return {}
+
+    excel_path = path or config.EXCEL_PATH
+    sheet = sheet_name or config.EXCEL_SHEET_NAME
+
+    if not os.path.exists(excel_path):
+        raise IOError(u"Файл правил не найден: {0}".format(excel_path))
+
+    sheets_rows = _load_all_sheets_as_rows(excel_path, sheet)
+    result = {column: set() for column in columns}
+
+    for _, rows in sheets_rows:
+        if not rows:
+            continue
+
+        header = rows[0]
+        header_map = {}
+        for idx, raw_name in enumerate(header):
+            key = (_as_text(raw_name) or u"").strip()
+            if key:
+                header_map[key] = idx
+
+        column_indices = {
+            column: header_map.get(column)
+            for column in result.keys()
+        }
+
+        for row in rows[1:]:
+            for column, values in result.items():
+                idx = column_indices.get(column)
+                if idx is None or idx >= len(row):
+                    continue
+                text = (_as_text(row[idx]) or u"").strip()
+                if text:
+                    values.add(text)
+
+    return {column: values for column, values in result.items() if values}
+
+
+def load_rules_from_db():
+    """Заглушка для последующей реализации загрузки правил из БД."""
+
+    raise NotImplementedError(u"Загрузка правил из БД пока не реализована")

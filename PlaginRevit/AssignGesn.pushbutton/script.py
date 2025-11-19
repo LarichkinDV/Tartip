@@ -14,8 +14,7 @@ if BASE_DIR not in sys.path:
 if LIB_DIR not in sys.path:
     sys.path.append(LIB_DIR)
 
-from lib.gesn_rules import load_rules_from_excel  # noqa: E402
-from lib import config  # noqa: E402
+from lib import config, gesn_rules, spec_keys_cache  # noqa: E402
 
 # Имена используемых параметров
 PARAM_REINFORCEMENT = u"Армирование"
@@ -590,27 +589,33 @@ def _collect_walls():
     return list(collector)
 
 
+def _prepare_rules():
+    """Загружает правила исходя из выбранного ранее источника."""
+
+    cache = None
+    try:
+        cache = spec_keys_cache.load_cache()
+    except Exception:
+        cache = None
+
+    if cache:
+        source_type = cache.get("source_type")
+        if source_type == "excel":
+            excel_path = cache.get("excel_path")
+            if excel_path:
+                return gesn_rules.load_rules_from_excel(path=excel_path)
+        elif source_type == "db":
+            return gesn_rules.load_rules_from_db()
+
+    return gesn_rules.load_rules_from_excel()
+
+
 def main():
     out = script.get_output()
-    excel_path = forms.pick_file(
-        file_ext="xlsx",
-        multi_file=False,
-        title=u"Выберите файл Excel с таблицей соответствий ГЭСН",
-    )
-    if not excel_path:
-        forms.alert(u"Файл с правилами не выбран. Операция отменена.", exitscript=True)
-        return
-
     try:
-        rules = load_rules_from_excel(path=excel_path)
+        rules = _prepare_rules()
     except Exception as exc:
-        forms.alert(
-            u"Не удалось загрузить таблицу правил из файла:\n{0}\n\nОшибка: {1}".format(
-                excel_path,
-                exc,
-            ),
-            exitscript=True,
-        )
+        forms.alert(u"Не удалось загрузить таблицу правил: {0}".format(exc), exitscript=True)
         return
 
     walls = _collect_walls()
