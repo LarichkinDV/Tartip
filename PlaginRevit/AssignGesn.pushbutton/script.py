@@ -112,10 +112,6 @@ def _get_type(wall):
             return None
 
 
-def _prepare_rules():
-    return load_rules_from_excel()
-
-
 def _get_writable_param(element, names):
     """Возвращает первый доступный параметр из списка имен."""
 
@@ -278,10 +274,13 @@ def _explain_no_match(
     else:
         stage_rules = reinf_rules
 
-    norm_brick = brick_size or u""
+    norm_brick = (brick_size or u"").strip().lower()
     brick_rules = [r for r in stage_rules if not r.brick_size or r.brick_size == norm_brick]
     if not brick_rules:
-        msg = u"размеры кирпича: {0}".format(norm_brick or (u"параметр не найден" if not brick_found else u"(пусто)"))
+        display_brick = brick_size or norm_brick
+        msg = u"размеры кирпича: {0}".format(
+            display_brick or (u"параметр не найден" if not brick_found else u"(пусто)")
+        )
         reasons.append(msg)
 
     if not reasons:
@@ -416,7 +415,8 @@ def _process_wall(wall, rules):
     reinf_param = wall.LookupParameter(PARAM_REINFORCEMENT)
     reinforcement_text = _normalize_bool_text(_get_parameter_value(wall, PARAM_REINFORCEMENT)) if reinf_param else u""
     brick_param = wall.LookupParameter(PARAM_BRICK_SIZE)
-    brick_size = _t(_get_parameter_value(wall, PARAM_BRICK_SIZE)) if brick_param else u""
+    brick_value_raw = _t(_get_parameter_value(wall, PARAM_BRICK_SIZE)) if brick_param else u""
+    brick_size_normalized = (brick_value_raw or u"").strip().lower()
 
     input_details = _format_input_details(
         family_name,
@@ -427,7 +427,7 @@ def _process_wall(wall, rules):
         height_found,
         reinforcement_text,
         bool(reinf_param),
-        brick_size,
+        brick_value_raw,
         bool(brick_param),
     )
 
@@ -450,7 +450,7 @@ def _process_wall(wall, rules):
         thickness_mm,
         height_mm,
         reinforcement_text,
-        brick_size,
+        brick_size_normalized,
     )
     if not matched_rules:
         reason = _explain_no_match(
@@ -460,7 +460,7 @@ def _process_wall(wall, rules):
             thickness_mm,
             height_mm,
             reinforcement_text,
-            brick_size,
+            brick_value_raw,
             thickness_found=thickness_found,
             height_found=height_found,
             reinf_found=bool(reinf_param),
@@ -511,10 +511,25 @@ def _collect_walls():
 
 def main():
     out = script.get_output()
+    excel_path = forms.pick_file(
+        file_ext="xlsx",
+        multi_file=False,
+        title=u"Выберите файл Excel с таблицей соответствий ГЭСН",
+    )
+    if not excel_path:
+        forms.alert(u"Файл с правилами не выбран. Операция отменена.", exitscript=True)
+        return
+
     try:
-        rules = _prepare_rules()
+        rules = load_rules_from_excel(path=excel_path)
     except Exception as exc:
-        forms.alert(u"Не удалось загрузить таблицу правил: {0}".format(exc), exitscript=True)
+        forms.alert(
+            u"Не удалось загрузить таблицу правил из файла:\n{0}\n\nОшибка: {1}".format(
+                excel_path,
+                exc,
+            ),
+            exitscript=True,
+        )
         return
 
     walls = _collect_walls()

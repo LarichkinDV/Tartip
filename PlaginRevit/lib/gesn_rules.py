@@ -308,8 +308,12 @@ def load_rules_from_excel(path=None, sheet_name=None):
             continue
 
         header = rows[0]
-        header_map = {name: idx for idx, name in enumerate(header)}
-        if u"ГЭСН_код" not in header_map:
+        header_map = {}
+        for idx, raw_name in enumerate(header):
+            key = (_as_text(raw_name) or u"").strip()
+            if key:
+                header_map[key] = idx
+        if u"Шифр ГЭСН" not in header_map:
             continue
 
         def get_cell(row, name):
@@ -319,21 +323,28 @@ def load_rules_from_excel(path=None, sheet_name=None):
             return row[idx]
 
         volume_cond_column = None
-        for candidate in [u"Объем_условие", u"Объем", u"Volume_condition", u"VolumeRange"]:
+        for candidate in [
+            u"Объем_условие",
+            u"Условие объема",
+            u"Объем",
+            u"Volume_condition",
+            u"VolumeRange",
+        ]:
             if candidate in header_map:
                 volume_cond_column = candidate
                 break
 
         for row in rows[1:]:
-            gesn_code = _as_text(get_cell(row, u"ГЭСН_код"))
+            gesn_code = _as_text(get_cell(row, u"Шифр ГЭСН"))
             if not gesn_code:
                 continue
 
-            raw_height_min = get_cell(row, u"Height_min_mm")
-            raw_height_max = get_cell(row, u"Height_max_mm")
+            raw_height_value = get_cell(row, u"Неприсоединенная высота")
             height_conditions, height_label = _build_height_conditions(
-                raw_height_min, raw_height_max
+                None, raw_height_value
             )
+            height_min_mm = 0.0
+            height_max_mm = _first_number(raw_height_value, 0.0) or 0.0
 
             volume_conditions = []
             volume_label = u""
@@ -343,17 +354,25 @@ def load_rules_from_excel(path=None, sheet_name=None):
                 )
 
             rule = GesnRule(
-                family=_as_text(get_cell(row, u"Family")) or u"",
-                type_name=_as_text(get_cell(row, u"TypeName")) or u"",
-                thickness_mm=_as_float(get_cell(row, u"Thickness_mm")) or 0.0,
-                height_min_mm=_first_number(raw_height_min, 0.0) or 0.0,
-                height_max_mm=_first_number(raw_height_max, 0.0) or 0.0,
+                family=(_as_text(get_cell(row, u"Семейство")) or u"").strip(),
+                type_name=(_as_text(get_cell(row, u"Тип")) or u"").strip(),
+                thickness_mm=_as_float(get_cell(row, u"Толщина")) or 0.0,
+                height_min_mm=height_min_mm,
+                height_max_mm=height_max_mm,
                 reinforcement=_normalize_bool_text(get_cell(row, u"Армирование")),
-                brick_size=_as_text(get_cell(row, u"Размеры кирпича")) or u"",
+                brick_size=(
+                    (_as_text(get_cell(row, u"Размеры кладочного материала")) or u"")
+                    .strip()
+                    .lower()
+                ),
                 gesn_code=gesn_code,
-                unit_raw=_as_text(get_cell(row, u"ЕдИзм")) or u"",
-                multiplier=_as_float(get_cell(row, u"Кратность")) or 1.0,
-                volume_param=_as_text(get_cell(row, u"Параметр_объёма")) or u"",
+                unit_raw=_as_text(get_cell(row, u"Единица измерения")) or u"",
+                multiplier=_as_float(get_cell(row, u"Кратность единицы измерения"))
+                or 1.0,
+                volume_param=(
+                    (_as_text(get_cell(row, u"Параметр_объёма")) or u"").strip()
+                    or getattr(config, "DEFAULT_VOLUME_PARAM", u"Площадь")
+                ),
                 height_conditions=height_conditions,
                 volume_conditions=volume_conditions,
                 height_label=height_label,
