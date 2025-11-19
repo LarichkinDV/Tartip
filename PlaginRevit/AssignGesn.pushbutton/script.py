@@ -277,8 +277,8 @@ def _explain_no_match(
                     expected or u"ожидание не задано",
                 )
             )
-    else:
-        stage_rules = height_rules
+        else:
+            stage_rules = height_rules
 
     raw_stage = (stage_text or u"").strip()
     norm_stage = raw_stage.lower()
