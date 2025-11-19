@@ -358,14 +358,25 @@ def _get_volume_value(wall, rule):
     return metric_value, units_label
 
 
+def _format_numeric_value(value, precision=5):
+    """Форматирует число с округлением и заменой точки на запятую."""
+
+    if value is None:
+        return u""
+
+    rounded = round(value, precision)
+    template = u"{0:.{1}f}".format(rounded, precision)
+    trimmed = template.rstrip("0").rstrip(".")
+    if not trimmed:
+        trimmed = u"0"
+    return trimmed.replace(u".", u",")
+
+
 def _calc_code_fragment(rule, volume_value):
     multiplier = rule.multiplier or 1.0
-    volume_param = rule.volume_param or u""
-    return u"{0}[{1}/{2}]".format(
-        rule.gesn_code,
-        volume_param,
-        int(multiplier) if multiplier.is_integer() else multiplier,
-    )
+    normalized = volume_value / multiplier if multiplier else volume_value
+    normalized_text = _format_numeric_value(normalized)
+    return u"{0}[{1}]".format(rule.gesn_code, normalized_text)
 
 
 def _format_rule_result(rule, volume_value, unit_label):
@@ -553,9 +564,17 @@ def _process_wall(wall, rules):
         entry["message"] = full_reason
         return target_param.Set(full_reason), False, entry
 
+    unique_fragments = []
+    seen_fragments = set()
+    for fragment in fragments_for_param:
+        if fragment in seen_fragments:
+            continue
+        seen_fragments.add(fragment)
+        unique_fragments.append(fragment)
+
     entry["matched"] = True
     entry["message"] = u"{0} | {1}".format(u"; ".join(fragments_for_report), input_details)
-    return target_param.Set(u"; ".join(fragments_for_param)), True, entry
+    return target_param.Set(u"; ".join(unique_fragments)), True, entry
 
 
 def _collect_walls():
