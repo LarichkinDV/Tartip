@@ -20,13 +20,15 @@ from lib import config  # noqa: E402
 # Имена используемых параметров
 PARAM_REINFORCEMENT = u"Армирование"
 PARAM_BRICK_SIZE = u"Размеры кирпича"
-PARAM_STAGE = u"Стадия"
+PARAM_STAGE_NAME = u"Стадия"
+STAGE_LABEL = (PARAM_STAGE_NAME or u"Стадия").lower()
 # Параметры для вывода результата: сначала приоритетный, затем совместимый резервный
 PARAM_GESN_OUTPUT = [u"ACBD_ГЭСН", u"Шифр ГЭСН"]
 
 # Внутренние системные параметры
 PARAM_UNCONNECTED_HEIGHT = DB.BuiltInParameter.WALL_USER_HEIGHT_PARAM
 PARAM_WIDTH = DB.BuiltInParameter.WALL_ATTR_WIDTH_PARAM
+PARAM_STAGE_BUILTIN = DB.BuiltInParameter.PHASE_CREATED
 
 # Перевод единиц
 FEET_TO_MM = 304.8
@@ -87,6 +89,28 @@ def _get_parameter_value(element, param_name):
         return param.AsValueString()
     except Exception:
         return None
+
+
+def _get_stage_info(wall):
+    """Возвращает исходный и нормализованный текст стадии и признак наличия параметра."""
+
+    param = wall.get_Parameter(PARAM_STAGE_BUILTIN)
+    if not param:
+        return u"", u"", False
+
+    stage_raw = u""
+    try:
+        if param.StorageType == DB.StorageType.ElementId:
+            phase_id = param.AsElementId()
+            phase = revit.doc.GetElement(phase_id) if phase_id else None
+            stage_raw = _t(getattr(phase, "Name", u"")) if phase else u""
+        else:
+            stage_raw = _t(param.AsString() or param.AsValueString()) or u""
+    except Exception:
+        stage_raw = u""
+
+    normalized = (stage_raw or u"").strip().lower()
+    return stage_raw or u"", normalized, True
 
 
 def _get_height_mm(wall):
@@ -287,7 +311,7 @@ def _explain_no_match(
         display_stage = raw_stage or (
             u"параметр не найден" if not stage_found else u"(пусто)"
         )
-        reasons.append(u"стадия: {0}".format(display_stage))
+        reasons.append(u"{0}: {1}".format(STAGE_LABEL, display_stage))
     else:
         stage_rules = stage_filtered
 
@@ -396,9 +420,9 @@ def _format_input_details(
         items.append(u"высота=параметр не найден")
 
     if stage_found:
-        items.append(u"стадия={0}".format((stage_text or u"").strip() or u"(пусто)"))
+        items.append(u"{0}={1}".format(STAGE_LABEL, (stage_text or u"").strip() or u"(пусто)"))
     else:
-        items.append(u"стадия=параметр не найден")
+        items.append(u"{0}=параметр не найден".format(STAGE_LABEL))
 
     if reinf_found:
         items.append(u"армирование={0}".format(reinforcement_text or u"(пусто)"))
@@ -449,9 +473,7 @@ def _process_wall(wall, rules):
     brick_param = wall.LookupParameter(PARAM_BRICK_SIZE)
     brick_value_raw = _t(_get_parameter_value(wall, PARAM_BRICK_SIZE)) if brick_param else u""
     brick_size_normalized = (brick_value_raw or u"").strip().lower()
-    stage_param = wall.LookupParameter(PARAM_STAGE)
-    stage_value_raw = _t(_get_parameter_value(wall, PARAM_STAGE)) if stage_param else u""
-    stage_text = (stage_value_raw or u"").strip().lower()
+    stage_value_raw, stage_text, stage_found = _get_stage_info(wall)
 
     input_details = _format_input_details(
         family_name,
@@ -461,7 +483,7 @@ def _process_wall(wall, rules):
         height_mm,
         height_found,
         stage_value_raw,
-        bool(stage_param),
+        stage_found,
         reinforcement_text,
         bool(reinf_param),
         brick_value_raw,
@@ -502,7 +524,7 @@ def _process_wall(wall, rules):
             brick_value_raw,
             thickness_found=thickness_found,
             height_found=height_found,
-            stage_found=bool(stage_param),
+            stage_found=stage_found,
             reinf_found=bool(reinf_param),
             brick_found=bool(brick_param),
         )
