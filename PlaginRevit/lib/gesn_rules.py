@@ -335,6 +335,8 @@ def load_rules_from_excel(path=None, sheet_name=None):
                 volume_cond_column = candidate
                 break
 
+        thickness_headers = [u"Width", u"Ширина", u"Толщина"]
+
         for row in rows[1:]:
             gesn_code = _as_text(get_cell(row, u"Шифр ГЭСН"))
             if not gesn_code:
@@ -350,6 +352,16 @@ def load_rules_from_excel(path=None, sheet_name=None):
             stage_raw = get_cell(row, u"Стадия")
             stage = (_as_text(stage_raw) or u"").strip().lower()
 
+            thickness_mm = 0.0
+            for header in thickness_headers:
+                if header not in header_map:
+                    continue
+                candidate = _as_float(get_cell(row, header))
+                if candidate is None:
+                    continue
+                thickness_mm = candidate
+                break
+
             volume_conditions = []
             volume_label = u""
             if volume_cond_column:
@@ -360,7 +372,7 @@ def load_rules_from_excel(path=None, sheet_name=None):
             rule = GesnRule(
                 family=(_as_text(get_cell(row, u"Семейство")) or u"").strip(),
                 type_name=(_as_text(get_cell(row, u"Тип")) or u"").strip(),
-                thickness_mm=_as_float(get_cell(row, u"Толщина")) or 0.0,
+                thickness_mm=thickness_mm,
                 height_min_mm=height_min_mm,
                 height_max_mm=height_max_mm,
                 stage=stage,
