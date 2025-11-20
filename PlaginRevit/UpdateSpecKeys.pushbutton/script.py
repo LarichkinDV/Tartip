@@ -169,13 +169,13 @@ def _handle_db_source():
 
 
 def main():
-    options = [
-        forms.CommandSwitchOption(SOURCE_EXCEL, u"Из файла Excel"),
-        forms.CommandSwitchOption(SOURCE_DB, u"Из базы данных"),
-    ]
-    selected = forms.CommandSwitchWindow.show(
-        options,
-        message=u"Выберите источник правил ГЭСН",
+    option_map = {
+        u"Из файла Excel": SOURCE_EXCEL,
+        u"Из базы данных": SOURCE_DB,
+    }
+    selected = forms.alert(
+        u"Выберите источник правил ГЭСН",
+        options=list(option_map.keys()),
         title=u"Обновить ключи спецификаций",
     )
 
@@ -183,10 +183,7 @@ def main():
         forms.alert(u"Операция отменена пользователем.", exitscript=True)
         return
 
-    if isinstance(selected, STRING_TYPES):
-        source = selected
-    else:
-        source = getattr(selected, "name", SOURCE_EXCEL)
+    source = option_map.get(selected, SOURCE_EXCEL)
 
     if source == SOURCE_DB:
         _handle_db_source()
