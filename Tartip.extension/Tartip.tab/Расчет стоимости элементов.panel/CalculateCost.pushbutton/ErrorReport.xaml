@@ -1,7 +1,0 @@
-﻿<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Ошибки расчёта" Height="360" Width="640" WindowStartupLocation="CenterScreen">
-  <Grid Margin="8">
-    <ListView x:Name="ErrorsListView"/>
-  </Grid>
-</Window>
