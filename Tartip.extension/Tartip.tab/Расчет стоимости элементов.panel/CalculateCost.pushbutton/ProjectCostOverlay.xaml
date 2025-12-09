@@ -1,0 +1,28 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Стоимость проекта" Width="340" Height="130"
+    WindowStartupLocation="Manual" Left="10" Top="10"
+    WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+    ResizeMode="NoResize" Topmost="True" ShowInTaskbar="False">
+      <Border CornerRadius="10" Background="#EE202020" Padding="12">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <TextBlock Text="Стоимость проектируемого объекта" Foreground="White" FontWeight="Bold" FontSize="14"/>
+          <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+            <TextBlock Text="Н: " Foreground="White" FontSize="16"/>
+            <TextBlock x:Name="CostN" Foreground="White" FontSize="16" FontWeight="Bold"/>
+          </StackPanel>
+          <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,4,0,0">
+            <TextBlock Text="Ф: " Foreground="White" FontSize="16"/>
+            <TextBlock x:Name="CostF" Foreground="White" FontSize="16" FontWeight="Bold"/>
+          </StackPanel>
+          <Button x:Name="CloseBtn" Content="×" Width="24" Height="24"
+                  HorizontalAlignment="Right" VerticalAlignment="Top"
+                  Background="#33FFFFFF" Foreground="White" BorderThickness="0"/>
+        </Grid>
+      </Border>
+    </Window>
