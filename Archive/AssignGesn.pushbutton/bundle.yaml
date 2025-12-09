@@ -1,0 +1,5 @@
+---
+engine: ipy
+title: "Определить ГЭСН"
+tooltip: "Подбор ГЭСН по параметрам стены и правилам из Excel"
+icon: icon.png
