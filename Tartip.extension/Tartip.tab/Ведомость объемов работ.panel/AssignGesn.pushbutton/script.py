@@ -2,6 +2,7 @@
 """Определение ГЭСН для стен по таблице соответствий."""
 import os
 import sys
+from collections import OrderedDict
 
 from pyrevit import revit, DB, forms, script
 
@@ -568,6 +569,65 @@ def _collect_walls():
     return list(collector)
 
 
+def _select_source_and_update_cache():
+    """Показывает выбор источника правил и сохраняет результат в кэше."""
+
+    try:
+        cache = spec_keys_cache.load_cache()
+    except Exception:
+        cache = None
+    cache = cache or {}
+
+    options = OrderedDict()
+    options[u"Excel-файл с таблицей соответствия ГЭСН"] = "excel"
+    options[u"База данных (SQL)"] = "db"
+
+    choice = forms.CommandSwitchWindow.show(
+        options,
+        message=u"Выберите источник данных для правил ГЭСН",
+        width=500,
+        height=250,
+    )
+
+    if not choice:
+        return None
+
+    if choice == "excel":
+        initial_dir = None
+        if cache.get("excel_path") and os.path.exists(cache["excel_path"]):
+            initial_dir = os.path.dirname(cache["excel_path"])
+        elif getattr(config, "EXCEL_PATH", None):
+            try:
+                initial_dir = os.path.dirname(config.EXCEL_PATH)
+            except Exception:
+                initial_dir = None
+
+        excel_path = forms.pick_file(
+            file_ext="xlsx",
+            init_dir=initial_dir,
+            title=u"Выбор Excel-файла с правилами ГЭСН",
+        )
+
+        if not excel_path:
+            return None
+
+        try:
+            spec_keys_cache.save_cache(source_type="excel", excel_path=excel_path)
+        except Exception:
+            pass
+
+        return "excel"
+
+    if choice == "db":
+        try:
+            spec_keys_cache.save_cache(source_type="db")
+        except Exception:
+            pass
+        return "db"
+
+    return None
+
+
 def _prepare_rules():
     """Загружает правила исходя из выбранного ранее источника."""
 
@@ -591,6 +651,10 @@ def _prepare_rules():
 
 def main():
     out = script.get_output()
+
+    source_choice = _select_source_and_update_cache()
+    if source_choice is None:
+        return
     try:
         rules = _prepare_rules()
     except Exception as exc:
