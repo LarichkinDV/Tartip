@@ -592,7 +592,9 @@ def _select_source_and_update_cache():
     if not choice:
         return None
 
-    if choice == "excel":
+    selected = options.get(choice, choice)
+
+    if selected == "excel":
         initial_dir = None
         if cache.get("excel_path") and os.path.exists(cache["excel_path"]):
             initial_dir = os.path.dirname(cache["excel_path"])
@@ -618,7 +620,7 @@ def _select_source_and_update_cache():
 
         return "excel"
 
-    if choice == "db":
+    if selected == "db":
         try:
             spec_keys_cache.save_cache(source_type="db")
         except Exception:
