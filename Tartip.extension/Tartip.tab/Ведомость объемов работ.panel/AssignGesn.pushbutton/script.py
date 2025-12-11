@@ -461,9 +461,7 @@ def _process_wall(wall, rules):
     brick_param = wall.LookupParameter(PARAM_BRICK_SIZE)
     brick_size = _t(_get_parameter_value(wall, PARAM_BRICK_SIZE)) if brick_param else u""
     brick_size = (brick_size or u"").strip().lower()
-    stage_param = wall.LookupParameter(PARAM_STAGE)
-    stage_text = _t(_get_parameter_value(wall, PARAM_STAGE)) if stage_param else u""
-    stage_text = (stage_text or u"").strip().lower()
+    stage_text, stage_found = _get_stage_value(wall)
 
     input_details = _format_input_details(
         family_name,
@@ -473,7 +471,7 @@ def _process_wall(wall, rules):
         height_mm,
         height_found,
         stage_text,
-        bool(stage_param),
+        stage_found,
         reinforcement_text,
         bool(reinf_param),
         brick_size,
@@ -514,7 +512,7 @@ def _process_wall(wall, rules):
             brick_size,
             thickness_found=thickness_found,
             height_found=height_found,
-            stage_found=bool(stage_param),
+            stage_found=stage_found,
             reinf_found=bool(reinf_param),
             brick_found=bool(brick_param),
         )
@@ -567,6 +565,35 @@ def _collect_walls():
 
     collector = DB.FilteredElementCollector(doc).OfCategory(DB.BuiltInCategory.OST_Walls).WhereElementIsNotElementType()
     return list(collector)
+
+
+def _get_stage_value(wall):
+    """Возвращает нормализованный текст стадии и флаг, что параметр найден."""
+
+    stage_param = wall.LookupParameter(PARAM_STAGE)
+    if stage_param:
+        stage_value = _t(_get_parameter_value(wall, PARAM_STAGE))
+        return (stage_value or u"").strip().lower(), True
+
+    try:
+        built_stage = wall.get_Parameter(DB.BuiltInParameter.PHASE_CREATED)
+    except Exception:
+        built_stage = None
+
+    if built_stage:
+        stage_value = None
+        try:
+            stage_value = built_stage.AsValueString()
+        except Exception:
+            stage_value = None
+        if not stage_value:
+            try:
+                stage_value = built_stage.AsString()
+            except Exception:
+                stage_value = None
+        return (stage_value and _t(stage_value).strip().lower()) or u"", True
+
+    return u"", False
 
 
 def _select_source_and_update_cache():
