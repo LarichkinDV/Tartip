@@ -78,6 +78,11 @@ def _infer_volume_param(unit_raw, explicit_param=None):
     """Определяет параметр объёма по единице измерения, если он не задан явно."""
 
     if explicit_param:
+        norm_explicit = (_as_text(explicit_param) or u"").strip().lower()
+        if norm_explicit in {u"объем", u"объём", u"volume", u"vol"}:
+            return u"Объем"
+        if norm_explicit in {u"площадь", u"area", u"ar"}:
+            return u"Площадь"
         return explicit_param
 
     fallback = getattr(config, "DEFAULT_VOLUME_PARAM", u"Площадь")
