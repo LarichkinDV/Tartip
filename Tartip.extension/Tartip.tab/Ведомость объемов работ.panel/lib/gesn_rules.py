@@ -372,6 +372,12 @@ def _read_sheet_rows(zip_file, sheet_path, shared_strings):
             cell_type = cell.get("t")
             value_node = cell.find("s:v", namespace)
             if value_node is None:
+                # Поддержка inline строк (t="inlineStr") — текст лежит в <is><t>
+                if cell_type == "inlineStr":
+                    is_node = cell.find("s:is", namespace)
+                    if is_node is not None:
+                        cells[idx] = u"".join(is_node.itertext())
+                        continue
                 cells[idx] = None
                 continue
 
@@ -451,6 +457,8 @@ def load_rules_from_excel(path=None, sheet_name=None):
             u"Объем_условие",
             u"Условие объема",
             u"Объем",
+            u"Volume",
+            u"VOLUME",
             u"Volume_condition",
             u"VolumeRange",
         ]:
