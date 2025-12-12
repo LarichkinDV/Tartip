@@ -291,6 +291,8 @@ def _match_rules(
 
 def _explain_no_match(
     rules,
+    wall=None,
+    wall_type=None,
     family_name,
     type_name,
     thickness_mm,
@@ -311,18 +313,21 @@ def _explain_no_match(
         return u"Нет записей в БД (в таблице нет строк с кодами ГЭСН)"
 
     reasons = []
+    matched_labels = []
 
     family_rules = [r for r in stage_rules if not r.family or r.family == family_name]
     if not family_rules:
         reasons.append(u"семейство: {0}".format(family_name or u"(пусто)"))
     else:
         stage_rules = family_rules
+        matched_labels.append(u"семейство")
 
     type_rules = [r for r in stage_rules if not r.type_name or r.type_name == type_name]
     if not type_rules:
         reasons.append(u"тип: {0}".format(type_name or u"(пусто)"))
     else:
         stage_rules = type_rules
+        matched_labels.append(u"тип")
 
     if not thickness_found:
         reasons.append(u"толщина: параметр не найден")
@@ -341,6 +346,7 @@ def _explain_no_match(
             reasons.append(u"толщина: {0:.1f} мм".format(thickness_mm))
         else:
             stage_rules = thickness_rules
+            matched_labels.append(u"толщина")
 
     if not height_found:
         reasons.append(u"высота: параметр не найден")
@@ -376,6 +382,7 @@ def _explain_no_match(
             )
         else:
             stage_rules = height_rules
+            matched_labels.append(u"высота")
 
     raw_stage = (stage_text or u"").strip()
     norm_stage = raw_stage.lower()
@@ -387,6 +394,7 @@ def _explain_no_match(
         reasons.append(u"{0}: {1}".format(STAGE_LABEL, display_stage))
     else:
         stage_rules = stage_filtered
+        matched_labels.append(STAGE_LABEL)
 
     norm_reinf = reinforcement_text or u""
     reinf_rules = [r for r in stage_rules if not r.reinforcement or r.reinforcement == norm_reinf]
@@ -395,6 +403,7 @@ def _explain_no_match(
         reasons.append(msg)
     else:
         stage_rules = reinf_rules
+        matched_labels.append(u"армирование")
 
     norm_brick = (brick_size or u"").strip().lower()
     brick_rules = [r for r in stage_rules if not r.brick_size or r.brick_size == norm_brick]
@@ -404,11 +413,64 @@ def _explain_no_match(
             display_brick or (u"параметр не найден" if not brick_found else u"(пусто)")
         )
         reasons.append(msg)
+    else:
+        stage_rules = brick_rules
+        matched_labels.append(u"размеры кирпича")
+
+    # Дополнительные фильтры (ФСБЦ и др.)
+    extra_headers = set()
+    for r in stage_rules:
+        extra = getattr(r, "extra_filters", None) or {}
+        for name in extra.keys():
+            extra_headers.add(name)
+
+    for header in sorted(extra_headers):
+        expected_vals = set()
+        for r in stage_rules:
+            extra = getattr(r, "extra_filters", None) or {}
+            val = extra.get(header)
+            if val:
+                expected_vals.add(val)
+
+        if not expected_vals:
+            continue
+
+        actual_val = u""
+        if wall is not None:
+            actual_val = _get_extra_param_text(wall, wall_type, header)
+
+        if not actual_val:
+            reasons.append(u"{0}: параметр не найден".format(header))
+            continue
+
+        if actual_val not in expected_vals:
+            shown = sorted(expected_vals)
+            if len(shown) > 5:
+                shown = shown[:5] + [u"..."]
+            reasons.append(
+                u"{0}: {1} (ожидалось {2})".format(
+                    header,
+                    actual_val,
+                    u", ".join(shown),
+                )
+            )
+            continue
+
+        filtered = []
+        for r in stage_rules:
+            extra = getattr(r, "extra_filters", None) or {}
+            val = extra.get(header)
+            if not val or val == actual_val:
+                filtered.append(r)
+        stage_rules = filtered
+        matched_labels.append(header)
 
     if not reasons:
-        return u"Нет подходящей записи в БД"
+        prefix = u"Совпало: {0}. ".format(u", ".join(matched_labels)) if matched_labels else u""
+        return prefix + u"Нет подходящей записи в БД"
 
-    return u"Нет записей в БД ({0})".format(u"; ".join(reasons))
+    prefix = u"Совпало: {0}. ".format(u", ".join(matched_labels)) if matched_labels else u""
+    return prefix + u"Нет записей в БД ({0})".format(u"; ".join(reasons))
 
 
 def _get_volume_value(wall, rule):
@@ -603,13 +665,15 @@ def _process_wall(wall, rules):
     if not matched_rules:
         reason = _explain_no_match(
             rules,
-            entry["family"],
-            entry["type"],
-            thickness_mm,
-            height_mm,
-            stage_text,
-            reinforcement_text,
-            brick_size,
+            wall=wall,
+            wall_type=wall_type,
+            family_name=entry["family"],
+            type_name=entry["type"],
+            thickness_mm=thickness_mm,
+            height_mm=height_mm,
+            stage_text=stage_text,
+            reinforcement_text=reinforcement_text,
+            brick_size=brick_size,
             thickness_found=thickness_found,
             height_found=height_found,
             stage_found=stage_found,
