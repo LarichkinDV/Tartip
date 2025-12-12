@@ -292,7 +292,10 @@ def _match_rules(
                     continue
                 expected_set = set(expected_values) if isinstance(expected_values, (list, tuple, set)) else {expected_values}
                 actual_set = _get_extra_actual_values(wall, wall_type, name)
-                if not actual_set or not (actual_set & expected_set):
+                if not actual_set:
+                    # У элемента нет значения — фильтр не применяем
+                    continue
+                if not (actual_set & expected_set):
                     extra_ok = False
                     break
             if not extra_ok:
@@ -454,7 +457,7 @@ def _explain_no_match(
             actual_vals = _get_extra_actual_values(wall, wall_type, header)
 
         if not actual_vals:
-            reasons.append(u"{0}: параметр не найден".format(header))
+            # У элемента нет значения — фильтр не применяем и не считаем причиной
             continue
 
         if not (actual_vals & expected_vals):
@@ -723,7 +726,11 @@ def _process_wall(wall, rules):
             score += 1
         extra_filters = getattr(rule, "extra_filters", None) or {}
         if extra_filters:
-            score += len(extra_filters)
+            applied = 0
+            for name in extra_filters.keys():
+                if _get_extra_actual_values(wall, wall_type, name):
+                    applied += 1
+            score += applied
         if getattr(rule, "volume_conditions", None):
             score += 1
         return score
