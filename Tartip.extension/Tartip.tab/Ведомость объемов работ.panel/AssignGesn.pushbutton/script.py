@@ -37,6 +37,7 @@ FEET_TO_MM = 304.8
 VOLUME_PARAMS = {
     u"Площадь": DB.BuiltInParameter.HOST_AREA_COMPUTED,
     u"Объем": DB.BuiltInParameter.HOST_VOLUME_COMPUTED,
+    u"Объём": DB.BuiltInParameter.HOST_VOLUME_COMPUTED,
 }
 
 

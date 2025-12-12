@@ -73,6 +73,26 @@ def _normalize_stage_value(value):
     return aliases.get(norm, norm)
 
 
+def _infer_volume_param(unit_raw, explicit_param=None):
+    """Определяет параметр объёма по единице измерения, если он не задан явно."""
+
+    if explicit_param:
+        return explicit_param
+
+    fallback = getattr(config, "DEFAULT_VOLUME_PARAM", u"Площадь")
+    unit_text = (_as_text(unit_raw) or u"").strip().lower()
+    unit_text = (
+        unit_text.replace(u"\u00b3", u"3")  # ³ -> 3
+        .replace(u"^", u"")
+        .replace(u" ", u"")
+    )
+
+    if u"м3" in unit_text or u"m3" in unit_text or u"куб" in unit_text:
+        return u"Объем"
+
+    return fallback
+
+
 def _parse_conditions(raw_value, default_operator=None):
     """Парсинг строковых условий вида ">1000&<=2000" в список (op, number)."""
 
@@ -406,6 +426,15 @@ def load_rules_from_excel(path=None, sheet_name=None):
                     get_cell(row, volume_cond_column)
                 )
 
+            unit_raw = _as_text(get_cell(row, u"Единица измерения")) or u""
+            multiplier = (
+                _as_float(get_cell(row, u"Кратность единицы измерения")) or 1.0
+            )
+            explicit_volume_param = (
+                (_as_text(get_cell(row, u"Параметр_объёма")) or u"").strip()
+            )
+            volume_param = _infer_volume_param(unit_raw, explicit_volume_param)
+
             rule = GesnRule(
                 family=(_as_text(get_cell(row, u"Семейство")) or u"").strip(),
                 type_name=(_as_text(get_cell(row, u"Тип")) or u"").strip(),
@@ -420,13 +449,9 @@ def load_rules_from_excel(path=None, sheet_name=None):
                     .lower()
                 ),
                 gesn_code=gesn_code,
-                unit_raw=_as_text(get_cell(row, u"Единица измерения")) or u"",
-                multiplier=_as_float(get_cell(row, u"Кратность единицы измерения"))
-                or 1.0,
-                volume_param=(
-                    (_as_text(get_cell(row, u"Параметр_объёма")) or u"").strip()
-                    or getattr(config, "DEFAULT_VOLUME_PARAM", u"Площадь")
-                ),
+                unit_raw=unit_raw,
+                multiplier=multiplier,
+                volume_param=volume_param,
                 height_conditions=height_conditions,
                 volume_conditions=volume_conditions,
                 height_label=height_label,
