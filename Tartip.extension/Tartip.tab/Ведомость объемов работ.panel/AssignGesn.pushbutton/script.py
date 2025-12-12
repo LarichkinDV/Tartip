@@ -1062,7 +1062,7 @@ def _select_source_and_update_cache():
 def _get_stage_value(wall):
     """Возвращает нормализованный текст стадии и флаг, что параметр найден."""
 
-    for name in (PARAM_STAGE, PARAM_STAGE_ALT):
+    for name in (PARAM_STAGE, PARAM_STAGE_ALT, u"Phase Created"):
         stage_param = wall.LookupParameter(name)
         if stage_param:
             stage_value = _normalize_stage(_get_parameter_value(wall, name))

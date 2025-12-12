@@ -458,7 +458,16 @@ def load_rules_from_excel(path=None, sheet_name=None):
                 volume_cond_column = candidate
                 break
 
-        has_stage_column = u"Стадия" in header_map
+        stage_column = None
+        for candidate in [
+            u"Стадия",
+            u"Стадия возведения",
+            u"Phase Created",
+            u"PhaseCreated",
+        ]:
+            if candidate in header_map:
+                stage_column = candidate
+                break
         thickness_headers = [u"Width", u"Ширина", u"Толщина"]
         brick_size_headers = [
             u"Размеры кладочного материала",
@@ -505,11 +514,10 @@ def load_rules_from_excel(path=None, sheet_name=None):
                 height_min_mm = 0.0
                 height_max_mm = _first_number(raw_height_value, 0.0) or 0.0
 
-            if has_stage_column:
-                stage_raw = get_cell(row, u"Стадия")
+            stage = u""
+            if stage_column:
+                stage_raw = get_cell(row, stage_column)
                 stage = _normalize_stage_value(stage_raw)
-            else:
-                stage = u""
 
             thickness_mm = None
             for header in thickness_headers:
