@@ -207,8 +207,20 @@ def _height_matches(rule, height_mm):
     return h_min <= height_mm <= h_max
 
 
+def _get_extra_param_text(wall, wall_type, param_name):
+    """Возвращает нормализованный текст значения доп. параметра (ФСБЦ и т.п.)."""
+
+    value = _get_parameter_value(wall, param_name)
+    if value is None and wall_type is not None:
+        value = _get_parameter_value(wall_type, param_name)
+    text = (_t(value) or u"").strip().lower()
+    return text.replace(u"\xa0", u" ")
+
+
 def _match_rules(
     rules,
+    wall,
+    wall_type,
     family_name,
     type_name,
     thickness_mm,
@@ -238,6 +250,18 @@ def _match_rules(
             continue
         if rule.brick_size and rule.brick_size != brick_size:
             continue
+        extra_filters = getattr(rule, "extra_filters", None) or {}
+        if extra_filters:
+            extra_ok = True
+            for name, expected in extra_filters.items():
+                if not expected:
+                    continue
+                actual = _get_extra_param_text(wall, wall_type, name)
+                if not actual or actual != expected:
+                    extra_ok = False
+                    break
+            if not extra_ok:
+                continue
         matched.append(rule)
     return matched
 
@@ -544,6 +568,8 @@ def _process_wall(wall, rules):
 
     matched_rules = _match_rules(
         rules,
+        wall,
+        wall_type,
         family_name,
         type_name,
         thickness_mm,
@@ -571,6 +597,38 @@ def _process_wall(wall, rules):
         full_reason = u"{0} | {1}".format(reason, input_details)
         entry["message"] = full_reason
         return target_param.Set(full_reason), False, entry
+
+    def _rule_specificity(rule):
+        score = 0
+        if getattr(rule, "family", None):
+            score += 1
+        if getattr(rule, "type_name", None):
+            score += 1
+        if getattr(rule, "thickness_mm", None) is not None:
+            score += 1
+        if getattr(rule, "height_conditions", None):
+            score += 1
+        else:
+            if getattr(rule, "height_min_mm", None) is not None or getattr(rule, "height_max_mm", None) is not None:
+                score += 1
+        if getattr(rule, "stage", None):
+            score += 1
+        if getattr(rule, "reinforcement", None):
+            score += 1
+        if getattr(rule, "brick_size", None):
+            score += 1
+        extra_filters = getattr(rule, "extra_filters", None) or {}
+        if extra_filters:
+            score += len(extra_filters)
+        if getattr(rule, "volume_conditions", None):
+            score += 1
+        return score
+
+    try:
+        max_score = max(_rule_specificity(r) for r in matched_rules)
+        matched_rules = [r for r in matched_rules if _rule_specificity(r) == max_score]
+    except Exception:
+        pass
 
     fragments_for_param = []
     fragments_for_report = []

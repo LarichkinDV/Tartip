@@ -27,6 +27,7 @@ GesnRule = namedtuple(
         "volume_conditions",
         "height_label",
         "volume_label",
+        "extra_filters",
     ],
 )
 
@@ -382,6 +383,16 @@ def load_rules_from_excel(path=None, sheet_name=None):
 
         has_stage_column = u"Стадия" in header_map
         thickness_headers = [u"Width", u"Ширина", u"Толщина"]
+        brick_size_headers = [
+            u"Размеры кладочного материала",
+            u"Размеры кирпича",
+            u"Размеры кладки",
+        ]
+        extra_headers = []
+        for key in header_map.keys():
+            upper_key = key.upper()
+            if upper_key.startswith(u"ФСБЦ") or upper_key.startswith(u"FSBC"):
+                extra_headers.append(key)
 
         for row in rows[1:]:
             gesn_code = _as_text(get_cell(row, u"Шифр ГЭСН"))
@@ -426,6 +437,25 @@ def load_rules_from_excel(path=None, sheet_name=None):
                     get_cell(row, volume_cond_column)
                 )
 
+            brick_size_raw = None
+            for header in brick_size_headers:
+                if header not in header_map:
+                    continue
+                brick_size_raw = get_cell(row, header)
+                break
+            brick_size = (
+                (_as_text(brick_size_raw) or u"")
+                .strip()
+                .lower()
+            )
+
+            extra_filters = {}
+            for header in extra_headers:
+                raw_value = get_cell(row, header)
+                text_value = (_as_text(raw_value) or u"").strip()
+                if text_value:
+                    extra_filters[header] = text_value.lower()
+
             unit_raw = _as_text(get_cell(row, u"Единица измерения")) or u""
             multiplier = (
                 _as_float(get_cell(row, u"Кратность единицы измерения")) or 1.0
@@ -443,11 +473,7 @@ def load_rules_from_excel(path=None, sheet_name=None):
                 height_max_mm=height_max_mm,
                 stage=stage,
                 reinforcement=_normalize_bool_text(get_cell(row, u"Армирование")),
-                brick_size=(
-                    (_as_text(get_cell(row, u"Размеры кладочного материала")) or u"")
-                    .strip()
-                    .lower()
-                ),
+                brick_size=brick_size,
                 gesn_code=gesn_code,
                 unit_raw=unit_raw,
                 multiplier=multiplier,
@@ -456,6 +482,7 @@ def load_rules_from_excel(path=None, sheet_name=None):
                 volume_conditions=volume_conditions,
                 height_label=height_label,
                 volume_label=volume_label,
+                extra_filters=extra_filters,
             )
             rules.append(rule)
 
