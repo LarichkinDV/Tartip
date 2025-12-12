@@ -481,7 +481,16 @@ def load_rules_from_excel(path=None, sheet_name=None):
             if not gesn_code:
                 continue
 
-            raw_height_value = get_cell(row, u"Неприсоединенная высота")
+            raw_height_value = None
+            for header in [
+                u"Неприсоединенная высота",
+                u"Неприсоединённая высота",
+                u"Unconnected Height",
+                u"UnconnectedHeight",
+            ]:
+                if header in header_map:
+                    raw_height_value = get_cell(row, header)
+                    break
             raw_height_text = (_as_text(raw_height_value) or u"").strip()
             if raw_height_value is None or not raw_height_text:
                 # Пустое значение высоты в Excel означает отсутствие ограничения.
