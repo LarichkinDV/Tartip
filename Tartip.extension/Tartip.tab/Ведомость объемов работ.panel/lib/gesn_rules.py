@@ -134,9 +134,25 @@ def _base_extra_key(header_name):
 
 
 def _normalize_extra_value(value):
+    """Нормализует ФСБЦ/доп. значения для сопоставления."""
+
     text = (_as_text(value) or u"").replace(u"\xa0", u" ").strip().lower()
-    if text in {u"(нет)", u"нет", u"none", u"-"}:
+    if not text or text in {u"(нет)", u"нет", u"none", u"-"}:
         return u""
+
+    # Убираем лишнюю пунктуацию/пробелы в наименованиях
+    text = text.replace(u",", u" ").replace(u";", u" ")
+    text = u" ".join(text.split())
+
+    # Для кодовых значений ФСБЦ унифицируем формат "ФСБЦ-..."
+    if u"фсбц" in text or u"fsbc" in text:
+        compact = text.replace(u" ", u"")
+        if compact.startswith(u"фсбц") and not compact.startswith(u"фсбц-"):
+            compact = u"фсбц-" + compact[len(u"фсбц"):]
+        if compact.startswith(u"fsbc") and not compact.startswith(u"fsbc-"):
+            compact = u"fsbc-" + compact[len(u"fsbc"):]
+        return compact
+
     return text
 
 

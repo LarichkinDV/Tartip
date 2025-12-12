@@ -231,13 +231,81 @@ def _height_matches(rule, height_mm):
 
 
 def _get_extra_param_text(wall, wall_type, param_name):
-    """Возвращает нормализованный текст значения доп. параметра (ФСБЦ и т.п.)."""
+    """Возвращает нормализованный текст значения доп. параметра (ФСБЦ и т.п.).
 
-    value = _get_parameter_value(wall, param_name)
-    if value is None and wall_type is not None:
-        value = _get_parameter_value(wall_type, param_name)
-    text = (_t(value) or u"").strip().lower()
-    return text.replace(u"\xa0", u" ")
+    Если параметр продублирован в разных группах, приоритет у PG_DATA (кодового значения).
+    """
+
+    def _normalize_extra_text(raw):
+        text = (_t(raw) or u"").replace(u"\xa0", u" ").strip().lower()
+        if not text or text in {u"(нет)", u"нет", u"none", u"-"}:
+            return u""
+        text = text.replace(u",", u" ").replace(u";", u" ")
+        text = u" ".join(text.split())
+        if u"фсбц" in text or u"fsbc" in text:
+            compact = text.replace(u" ", u"")
+            if compact.startswith(u"фсбц") and not compact.startswith(u"фсбц-"):
+                compact = u"фсбц-" + compact[len(u"фсбц"):]
+            if compact.startswith(u"fsbc") and not compact.startswith(u"fsbc-"):
+                compact = u"fsbc-" + compact[len(u"fsbc"):]
+            return compact
+        return text
+
+    params = []
+    try:
+        params.extend(list(wall.GetParameters(param_name)))
+    except Exception:
+        pass
+    if wall_type is not None:
+        try:
+            params.extend(list(wall_type.GetParameters(param_name)))
+        except Exception:
+            pass
+
+    if not params:
+        for owner in (wall, wall_type):
+            if owner is None:
+                continue
+            try:
+                p = owner.LookupParameter(param_name)
+            except Exception:
+                p = None
+            if p:
+                params.append(p)
+
+    data_group = getattr(DB, "BuiltInParameterGroup", None)
+    pg_data = getattr(data_group, "PG_DATA", None) if data_group else None
+    data_params = []
+    other_params = []
+    for p in params:
+        try:
+            group = p.Definition.ParameterGroup
+        except Exception:
+            group = None
+        if pg_data is not None and group == pg_data:
+            data_params.append(p)
+        else:
+            other_params.append(p)
+
+    ordered = data_params + other_params
+
+    for p in ordered:
+        raw_val = None
+        try:
+            if p.StorageType == DB.StorageType.String:
+                raw_val = p.AsString()
+            else:
+                raw_val = p.AsValueString()
+        except Exception:
+            try:
+                raw_val = p.AsString()
+            except Exception:
+                raw_val = None
+        norm = _normalize_extra_text(raw_val)
+        if norm:
+            return norm
+
+    return u""
 
 
 def _get_extra_actual_values(wall, wall_type, base_name):
