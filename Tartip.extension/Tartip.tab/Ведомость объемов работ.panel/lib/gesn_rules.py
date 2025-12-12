@@ -163,6 +163,21 @@ def _parse_conditions(raw_value, default_operator=None):
     if text is None:
         return [], u""
 
+    # Нормализуем возможные не-ASCII символы операторов (≤/≥/＞/＜) к ASCII,
+    # иначе fallback-парсер мог трактовать их как default_operator.
+    replacements = {
+        u"≤": u"<=",
+        u"≦": u"<=",
+        u"≥": u">=",
+        u"≧": u">=",
+        u"＜": u"<",
+        u"＞": u">",
+        u"﹤": u"<",
+        u"﹥": u">",
+    }
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+
     cleaned = text.replace(" ", "").replace("*", "&").replace(",", ".")
     parts = re.split(r"[&;|]+", cleaned)
 
