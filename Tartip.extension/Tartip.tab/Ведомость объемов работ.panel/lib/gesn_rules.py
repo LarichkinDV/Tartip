@@ -122,6 +122,24 @@ def _infer_volume_param(unit_raw, explicit_param=None):
     return fallback
 
 
+def _base_extra_key(header_name):
+    """Возвращает базовое имя ресурса без префикса 'Наименование'."""
+
+    text = (_as_text(header_name) or u"").strip()
+    low = text.lower()
+    prefix = u"наименование "
+    if low.startswith(prefix):
+        return text[len(prefix):].strip()
+    return text
+
+
+def _normalize_extra_value(value):
+    text = (_as_text(value) or u"").replace(u"\xa0", u" ").strip().lower()
+    if text in {u"(нет)", u"нет", u"none", u"-"}:
+        return u""
+    return text
+
+
 def _parse_conditions(raw_value, default_operator=None):
     """Парсинг строковых условий вида ">1000&<=2000" в список (op, number)."""
 
@@ -419,7 +437,12 @@ def load_rules_from_excel(path=None, sheet_name=None):
         extra_headers = []
         for key in header_map.keys():
             upper_key = key.upper()
-            if upper_key.startswith(u"ФСБЦ") or upper_key.startswith(u"FSBC"):
+            if (
+                upper_key.startswith(u"ФСБЦ")
+                or upper_key.startswith(u"FSBC")
+                or upper_key.startswith(u"НАИМЕНОВАНИЕ ФСБЦ")
+                or upper_key.startswith(u"НАИМЕНОВАНИЕ FSBC")
+            ):
                 extra_headers.append(key)
 
         for row in rows[1:]:
@@ -476,9 +499,17 @@ def load_rules_from_excel(path=None, sheet_name=None):
             extra_filters = {}
             for header in extra_headers:
                 raw_value = get_cell(row, header)
-                text_value = (_as_text(raw_value) or u"").strip()
-                if text_value:
-                    extra_filters[header] = text_value.lower()
+                text_value = _normalize_extra_value(raw_value)
+                if not text_value:
+                    continue
+                base_key = _base_extra_key(header)
+                if not base_key:
+                    continue
+                values_set = extra_filters.get(base_key)
+                if values_set is None:
+                    values_set = set()
+                    extra_filters[base_key] = values_set
+                values_set.add(text_value)
 
             unit_raw = _as_text(get_cell(row, u"Единица измерения")) or u""
             multiplier = (

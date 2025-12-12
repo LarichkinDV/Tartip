@@ -240,6 +240,17 @@ def _get_extra_param_text(wall, wall_type, param_name):
     return text.replace(u"\xa0", u" ")
 
 
+def _get_extra_actual_values(wall, wall_type, base_name):
+    """Собирает возможные значения доп. ресурса из обеих групп параметров."""
+
+    values = set()
+    for name in (base_name, u"Наименование {0}".format(base_name)):
+        val = _get_extra_param_text(wall, wall_type, name)
+        if val:
+            values.add(val)
+    return values
+
+
 def _match_rules(
     rules,
     wall,
@@ -276,11 +287,12 @@ def _match_rules(
         extra_filters = getattr(rule, "extra_filters", None) or {}
         if extra_filters:
             extra_ok = True
-            for name, expected in extra_filters.items():
-                if not expected:
+            for name, expected_values in extra_filters.items():
+                if not expected_values:
                     continue
-                actual = _get_extra_param_text(wall, wall_type, name)
-                if not actual or actual != expected:
+                expected_set = set(expected_values) if isinstance(expected_values, (list, tuple, set)) else {expected_values}
+                actual_set = _get_extra_actual_values(wall, wall_type, name)
+                if not actual_set or not (actual_set & expected_set):
                     extra_ok = False
                     break
             if not extra_ok:
@@ -428,29 +440,31 @@ def _explain_no_match(
         expected_vals = set()
         for r in stage_rules:
             extra = getattr(r, "extra_filters", None) or {}
-            val = extra.get(header)
-            if val:
-                expected_vals.add(val)
+            vals = extra.get(header) or []
+            if isinstance(vals, (list, tuple, set)):
+                expected_vals.update([v for v in vals if v])
+            elif vals:
+                expected_vals.add(vals)
 
         if not expected_vals:
             continue
 
-        actual_val = u""
+        actual_vals = set()
         if wall is not None:
-            actual_val = _get_extra_param_text(wall, wall_type, header)
+            actual_vals = _get_extra_actual_values(wall, wall_type, header)
 
-        if not actual_val:
+        if not actual_vals:
             reasons.append(u"{0}: параметр не найден".format(header))
             continue
 
-        if actual_val not in expected_vals:
+        if not (actual_vals & expected_vals):
             shown = sorted(expected_vals)
             if len(shown) > 5:
                 shown = shown[:5] + [u"..."]
             reasons.append(
                 u"{0}: {1} (ожидалось {2})".format(
                     header,
-                    actual_val,
+                    u", ".join(sorted(actual_vals)),
                     u", ".join(shown),
                 )
             )
@@ -459,8 +473,12 @@ def _explain_no_match(
         filtered = []
         for r in stage_rules:
             extra = getattr(r, "extra_filters", None) or {}
-            val = extra.get(header)
-            if not val or val == actual_val:
+            vals = extra.get(header) or []
+            if not vals:
+                filtered.append(r)
+                continue
+            rule_vals = set(vals) if isinstance(vals, (list, tuple, set)) else {vals}
+            if actual_vals & rule_vals:
                 filtered.append(r)
         stage_rules = filtered
         matched_labels.append(header)
