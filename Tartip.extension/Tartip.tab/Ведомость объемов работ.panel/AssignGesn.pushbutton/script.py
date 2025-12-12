@@ -21,6 +21,7 @@ from lib import config, gesn_rules, spec_keys_cache  # noqa: E402
 PARAM_REINFORCEMENT = u"Армирование"
 PARAM_BRICK_SIZE = u"Размеры кирпича"
 PARAM_STAGE = u"Стадия"
+PARAM_STAGE_ALT = u"Стадия возведения"
 STAGE_LABEL = (PARAM_STAGE or u"Стадия").lower()
 # Параметры для вывода результата: сначала приоритетный, затем совместимый резервный
 PARAM_GESN_OUTPUT = [u"ACBD_ГЭСН", u"Шифр ГЭСН"]
@@ -68,6 +69,23 @@ def _normalize_bool_text(value):
     if not text:
         return u""
     return u"да" if text in {u"да", u"yes", u"true", u"1", u"истина"} else u"нет"
+
+
+def _normalize_stage(value):
+    """Приводит значение стадии к единому виду для сопоставления."""
+
+    text = _t(value) or u""
+    text = text.replace(u"\xa0", u" ")  # NBSP → space
+    norm = text.strip().lower()
+    aliases = {
+        u"reconstruction": u"реконструкция",
+        u"reconstruction stage": u"реконструкция",
+        u"new construction": u"новая конструкция",
+        u"newconstruction": u"новая конструкция",
+        u"existing": u"существующая",
+        u"phase created": u"",
+    }
+    return aliases.get(norm, norm)
 
 
 def _get_parameter_value(element, param_name):
@@ -177,7 +195,15 @@ def _value_matches_conditions(value, conditions):
 def _height_matches(rule, height_mm):
     if rule.height_conditions:
         return _value_matches_conditions(height_mm, rule.height_conditions)
-    return rule.height_min_mm <= height_mm <= rule.height_max_mm
+    h_min = getattr(rule, "height_min_mm", None)
+    h_max = getattr(rule, "height_max_mm", None)
+    if h_min is None and h_max is None:
+        return True
+    if h_min is None:
+        return height_mm <= h_max
+    if h_max is None:
+        return height_mm >= h_min
+    return h_min <= height_mm <= h_max
 
 
 def _match_rules(
@@ -196,8 +222,13 @@ def _match_rules(
             continue
         if rule.type_name and rule.type_name != type_name:
             continue
-        if abs(rule.thickness_mm - thickness_mm) > config.THICKNESS_TOLERANCE_MM:
-            continue
+        has_rule_thickness = rule.thickness_mm is not None
+        if has_rule_thickness:
+            try:
+                if abs(rule.thickness_mm - thickness_mm) > config.THICKNESS_TOLERANCE_MM:
+                    continue
+            except Exception:
+                continue
         if not _height_matches(rule, height_mm):
             continue
         if rule.stage and rule.stage != stage_text:
@@ -248,7 +279,16 @@ def _explain_no_match(
     if not thickness_found:
         reasons.append(u"толщина: параметр не найден")
     else:
-        thickness_rules = [r for r in stage_rules if abs(r.thickness_mm - thickness_mm) <= config.THICKNESS_TOLERANCE_MM]
+        thickness_rules = []
+        for r in stage_rules:
+            if r.thickness_mm is None:
+                thickness_rules.append(r)
+                continue
+            try:
+                if abs(r.thickness_mm - thickness_mm) <= config.THICKNESS_TOLERANCE_MM:
+                    thickness_rules.append(r)
+            except Exception:
+                continue
         if not thickness_rules:
             reasons.append(u"толщина: {0:.1f} мм".format(thickness_mm))
         else:
@@ -259,19 +299,27 @@ def _explain_no_match(
     else:
         height_rules = [r for r in stage_rules if _height_matches(r, height_mm)]
         if not height_rules:
-            expected = u", ".join(
-                filter(
-                    None,
-                    [
-                        getattr(r, "height_label", u"")
-                        or u"{0:.1f}-{1:.1f} мм".format(
-                            r.height_min_mm,
-                            r.height_max_mm,
-                        )
-                        for r in stage_rules
-                    ],
-                )
-            )
+            expected_labels = []
+            seen_expected = set()
+            for r in stage_rules:
+                label = (getattr(r, "height_label", u"") or u"").strip()
+                if not label:
+                    h_min = getattr(r, "height_min_mm", None)
+                    h_max = getattr(r, "height_max_mm", None)
+                    if h_min is None and h_max is None:
+                        continue
+                    if h_min is None:
+                        label = u"<= {0:.1f} мм".format(h_max)
+                    elif h_max is None:
+                        label = u">= {0:.1f} мм".format(h_min)
+                    else:
+                        if abs(h_min) < 1e-6 and abs(h_max) < 1e-6:
+                            continue
+                        label = u"{0:.1f}-{1:.1f} мм".format(h_min, h_max)
+                if label and label not in seen_expected:
+                    seen_expected.add(label)
+                    expected_labels.append(label)
+            expected = u", ".join(expected_labels)
             reasons.append(
                 u"высота {0:.1f} мм не соответствует ({1})".format(
                     height_mm,
@@ -435,6 +483,9 @@ def _process_wall(wall, rules):
         "family": None,
         "message": None,
         "matched": False,
+        "quantity_text": u"",
+        "multiplier_text": u"",
+        "gesn_text": u"",
     }
 
     target_param = _get_writable_param(wall, PARAM_GESN_OUTPUT)
@@ -522,6 +573,7 @@ def _process_wall(wall, rules):
 
     fragments_for_param = []
     fragments_for_report = []
+    report_items = []
     last_volume_issue = None
     for rule in matched_rules:
         volume_value, unit_label = _get_volume_value(wall, rule)
@@ -534,6 +586,15 @@ def _process_wall(wall, rules):
             continue
         fragments_for_param.append(_calc_code_fragment(rule, volume_value))
         fragments_for_report.append(_format_rule_result(rule, volume_value, unit_label))
+        report_items.append(
+            {
+                "gesn_code": rule.gesn_code,
+                "volume_param": rule.volume_param or u"",
+                "volume_value": volume_value,
+                "unit_label": unit_label or u"",
+                "multiplier": rule.multiplier or 1.0,
+            }
+        )
 
     if not fragments_for_param:
         reason = last_volume_issue or u"Не удалось вычислить объём"
@@ -549,8 +610,76 @@ def _process_wall(wall, rules):
         seen_fragments.add(fragment)
         unique_fragments.append(fragment)
 
+    unique_reports = []
+    seen_reports = set()
+    for fragment in fragments_for_report:
+        if fragment in seen_reports:
+            continue
+        seen_reports.add(fragment)
+        unique_reports.append(fragment)
+
+    unique_items = []
+    seen_item_keys = set()
+    for item in report_items:
+        key = (
+            item.get("gesn_code"),
+            item.get("volume_param"),
+            round(item.get("volume_value") or 0.0, 6),
+            item.get("unit_label"),
+            item.get("multiplier"),
+        )
+        if key in seen_item_keys:
+            continue
+        seen_item_keys.add(key)
+        unique_items.append(item)
+
+    qty_parts = []
+    seen_qty = set()
+    for item in unique_items:
+        qty_key = (
+            item.get("volume_param"),
+            round(item.get("volume_value") or 0.0, 6),
+            item.get("unit_label"),
+        )
+        if qty_key in seen_qty:
+            continue
+        seen_qty.add(qty_key)
+        vol_param = item.get("volume_param") or u""
+        if vol_param:
+            qty_parts.append(
+                u"{0}: {1:.3f} {2}".format(
+                    vol_param,
+                    item.get("volume_value") or 0.0,
+                    item.get("unit_label") or u"",
+                )
+            )
+        else:
+            qty_parts.append(
+                u"{0:.3f} {1}".format(
+                    item.get("volume_value") or 0.0,
+                    item.get("unit_label") or u"",
+                )
+            )
+    entry["quantity_text"] = u"; ".join(qty_parts)
+
+    mult_parts = []
+    seen_mult = set()
+    for item in unique_items:
+        mult = item.get("multiplier") or 1.0
+        try:
+            mult_text = int(mult) if float(mult).is_integer() else mult
+        except Exception:
+            mult_text = mult
+        mult_str = _t(mult_text)
+        if mult_str in seen_mult:
+            continue
+        seen_mult.add(mult_str)
+        mult_parts.append(mult_str)
+    entry["multiplier_text"] = u"; ".join(mult_parts)
+    entry["gesn_text"] = u"; ".join(unique_fragments)
+
     entry["matched"] = True
-    entry["message"] = u"{0} | {1}".format(u"; ".join(fragments_for_report), input_details)
+    entry["message"] = u"{0} | {1}".format(u"; ".join(unique_reports), input_details)
     return target_param.Set(u"; ".join(unique_fragments)), True, entry
 
 
@@ -567,37 +696,70 @@ def _collect_walls():
     return list(collector)
 
 
-def _get_stage_value(wall):
-    """Возвращает нормализованный текст стадии и флаг, что параметр найден."""
+def _ask_scope_choice():
+    """Запрашивает у пользователя область обработки элементов."""
 
-    stage_param = wall.LookupParameter(PARAM_STAGE)
-    if stage_param:
-        stage_value = _t(_get_parameter_value(wall, PARAM_STAGE))
-        return (stage_value or u"").strip().lower(), True
+    options = OrderedDict()
+    options[u"Выделенные элементы"] = "selection"
+    options[u"Видимые элементы"] = "visible"
+    options[u"Вся модель"] = "all"
 
+    choice = forms.CommandSwitchWindow.show(
+        options,
+        message=u"Выберите область определения ГЭСН",
+        width=500,
+        height=250,
+    )
+
+    if not choice:
+        return None
+
+    return options.get(choice, choice)
+
+
+def _is_wall(element):
     try:
-        built_stage = wall.get_Parameter(DB.BuiltInParameter.PHASE_CREATED)
+        cat = getattr(element, "Category", None)
+        return cat and cat.Id.IntegerValue == int(DB.BuiltInCategory.OST_Walls)
     except Exception:
-        built_stage = None
+        return False
 
-    if built_stage:
-        stage_value = None
-        try:
-            stage_value = built_stage.AsValueString()
-        except Exception:
-            stage_value = None
-        if not stage_value:
-            try:
-                stage_value = built_stage.AsString()
-            except Exception:
-                stage_value = None
-        return (stage_value and _t(stage_value).strip().lower()) or u"", True
 
-    return u"", False
+def _collect_elements(scope):
+    """Собирает стены по выбранной области."""
+
+    uidoc = revit.uidoc
+    doc = revit.doc
+
+    if scope == "selection":
+        selection_ids = list(uidoc.Selection.GetElementIds()) if uidoc else []
+        if not selection_ids:
+            forms.alert(u"Не выбраны элементы для обработки", exitscript=True)
+            return []
+        elements = [doc.GetElement(eid) for eid in selection_ids]
+        return [el for el in elements if _is_wall(el)]
+
+    if scope == "visible":
+        view = getattr(doc, "ActiveView", None)
+        if view is None:
+            return []
+        collector = (
+            DB.FilteredElementCollector(doc, view.Id)
+            .OfCategory(DB.BuiltInCategory.OST_Walls)
+            .WhereElementIsNotElementType()
+        )
+        return list(collector)
+
+    collector = (
+        DB.FilteredElementCollector(doc)
+        .OfCategory(DB.BuiltInCategory.OST_Walls)
+        .WhereElementIsNotElementType()
+    )
+    return list(collector)
 
 
 def _select_source_and_update_cache():
-    """Показывает выбор источника правил и сохраняет результат в кэше."""
+    """Показывает диалог выбора источника правил (Excel/БД) и сохраняет выбор."""
 
     try:
         cache = spec_keys_cache.load_cache()
@@ -657,6 +819,36 @@ def _select_source_and_update_cache():
     return None
 
 
+def _get_stage_value(wall):
+    """Возвращает нормализованный текст стадии и флаг, что параметр найден."""
+
+    for name in (PARAM_STAGE, PARAM_STAGE_ALT):
+        stage_param = wall.LookupParameter(name)
+        if stage_param:
+            stage_value = _normalize_stage(_get_parameter_value(wall, name))
+            return stage_value, True
+
+    try:
+        built_stage = wall.get_Parameter(DB.BuiltInParameter.PHASE_CREATED)
+    except Exception:
+        built_stage = None
+
+    if built_stage:
+        stage_value = None
+        try:
+            stage_value = built_stage.AsValueString()
+        except Exception:
+            stage_value = None
+        if not stage_value:
+            try:
+                stage_value = built_stage.AsString()
+            except Exception:
+                stage_value = None
+        return _normalize_stage(stage_value), True
+
+    return u"", False
+
+
 def _prepare_rules():
     """Загружает правила исходя из выбранного ранее источника."""
 
@@ -681,6 +873,10 @@ def _prepare_rules():
 def main():
     out = script.get_output()
 
+    scope_choice = _ask_scope_choice()
+    if scope_choice is None:
+        return
+
     source_choice = _select_source_and_update_cache()
     if source_choice is None:
         return
@@ -690,8 +886,8 @@ def main():
         forms.alert(u"Не удалось загрузить таблицу правил: {0}".format(exc), exitscript=True)
         return
 
-    walls = _collect_walls()
-    if not walls:
+    elements = _collect_elements(scope_choice)
+    if not elements:
         forms.alert(u"В модели не найдены стены для обработки", exitscript=True)
         return
 
@@ -701,7 +897,7 @@ def main():
     entries = []
 
     with revit.Transaction(u"ТАРТИП: определить ГЭСН"):
-        for wall in walls:
+        for wall in elements:
             ok, has_match, entry = _process_wall(wall, rules)
             entries.append(entry)
             if ok:
@@ -731,14 +927,60 @@ def main():
 
     out.print_html(u"<p><b>{0}</b></p>".format(_h(summary_text)))
 
-    rows = []
-    for entry in entries:
+    css = (
+        u"<style>table.acbd{border-collapse:collapse;width:100%;margin:6px 0;color:#222;}"
+        u"table.acbd th,table.acbd td{border:1px solid #d0d0d0;padding:4px 6px;}"
+        u"table.acbd thead th{background:#e6e6e6;color:#101010;position:sticky;top:0;}</style>"
+    )
+
+    def _render_group(title, headers, rows, empty_message):
+        out.print_html(u"<h3>{0}</h3>".format(_h(title)))
+        if not rows:
+            out.print_html(u"<p>{0}</p>".format(_h(empty_message)))
+            return
+        table_html = [u"<table class='acbd'>", u"<thead><tr>"]
+        for h in headers:
+            table_html.append(u"<th>{0}</th>".format(_h(h)))
+        table_html.append(u"</tr></thead><tbody>")
+        for r in rows:
+            table_html.append(
+                u"<tr>{0}</tr>".format(
+                    u"".join(u"<td>{0}</td>".format(c) for c in r)
+                )
+            )
+        table_html.append(u"</tbody></table>")
+        out.print_html(u"".join(table_html))
+
+    entries_with = [e for e in entries if e.get("matched")]
+    entries_without = [e for e in entries if not e.get("matched")]
+
+    rows_with = []
+    for entry in entries_with:
         link = (
             out.linkify(DB.ElementId(entry["id"]), u"{}".format(entry["id"]))
             if entry.get("id") is not None
             else u""
         )
-        rows.append(
+        rows_with.append(
+            [
+                link,
+                _h(entry.get("cat") or u""),
+                _h(entry.get("family") or u""),
+                _h(entry.get("type") or u""),
+                _h(entry.get("quantity_text") or u""),
+                _h(entry.get("multiplier_text") or u""),
+                _h(entry.get("gesn_text") or u""),
+            ]
+        )
+
+    rows_without = []
+    for entry in entries_without:
+        link = (
+            out.linkify(DB.ElementId(entry["id"]), u"{}".format(entry["id"]))
+            if entry.get("id") is not None
+            else u""
+        )
+        rows_without.append(
             [
                 link,
                 _h(entry.get("cat") or u""),
@@ -748,23 +990,33 @@ def main():
             ]
         )
 
-    if rows:
-        header = [u"ID", u"Категория", u"Семейство", u"Тип", u"Результат"]
-        css = (
-            u"<style>table.acbd{border-collapse:collapse;width:100%;margin:6px 0;color:#222;}"
-            u"table.acbd th,table.acbd td{border:1px solid #d0d0d0;padding:4px 6px;}"
-            u"table.acbd thead th{background:#e6e6e6;color:#101010;position:sticky;top:0;}</style>"
-        )
-        table_html = [css, u"<table class='acbd'>", u"<thead><tr>"]
-        for h in header:
-            table_html.append(u"<th>{0}</th>".format(_h(h)))
-        table_html.append(u"</tr></thead><tbody>")
-        for r in rows:
-            table_html.append(u"<tr>{}</tr>".format(u"".join(u"<td>{}</td>".format(c) for c in r)))
-        table_html.append(u"</tbody></table>")
-        out.print_html(u"".join(table_html))
-    else:
-        out.print_html(u"<p>Нет обработанных стен для отображения.</p>")
+    out.print_html(css)
+    _render_group(
+        title=u"ГЭСН определён",
+        headers=[
+            u"ID",
+            u"Категория",
+            u"Семейство",
+            u"Тип",
+            u"Кол-во/Объём",
+            u"Кратность ед.изм. ГЭСН",
+            u"Шифр ГЭСН",
+        ],
+        rows=rows_with,
+        empty_message=u"Нет элементов с определённым шифром ГЭСН.",
+    )
+    _render_group(
+        title=u"ГЭСН не определён",
+        headers=[
+            u"ID",
+            u"Категория",
+            u"Семейство",
+            u"Тип",
+            u"Результат",
+        ],
+        rows=rows_without,
+        empty_message=u"Все элементы получили шифр ГЭСН.",
+    )
 
 
 if __name__ == "__main__":

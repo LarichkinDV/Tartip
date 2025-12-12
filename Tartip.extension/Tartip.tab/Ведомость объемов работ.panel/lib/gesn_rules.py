@@ -59,6 +59,20 @@ def _normalize_bool_text(value):
     return u"да" if text in {u"да", u"yes", u"1", u"true", u"истина"} else u"нет"
 
 
+def _normalize_stage_value(value):
+    text = (_as_text(value) or u"").replace(u"\xa0", u" ")
+    norm = text.strip().lower()
+    aliases = {
+        u"reconstruction": u"реконструкция",
+        u"reconstruction stage": u"реконструкция",
+        u"new construction": u"новая конструкция",
+        u"newconstruction": u"новая конструкция",
+        u"existing": u"существующая",
+        u"phase created": u"",
+    }
+    return aliases.get(norm, norm)
+
+
 def _parse_conditions(raw_value, default_operator=None):
     """Парсинг строковых условий вида ">1000&<=2000" в список (op, number)."""
 
@@ -83,6 +97,17 @@ def _parse_conditions(raw_value, default_operator=None):
             continue
         conditions.append((op, num))
         labels.append(u"{0}{1}".format(op, num))
+
+    # Fallback: если не удалось разобрать (например, текст с числом внутри),
+    # пробуем вытащить все числа и опциональные операторы из исходного текста.
+    if not conditions:
+        for match in re.finditer(r"(<=|>=|<|>|=)?\\s*([-+]?[0-9]*\\.?[0-9]+)", text):
+            op = match.group(1) or default_operator or "="
+            num = _as_float(match.group(2))
+            if num is None:
+                continue
+            conditions.append((op, num))
+            labels.append(u"{0}{1}".format(op, num))
 
     return conditions, u" & ".join(labels)
 
@@ -344,19 +369,27 @@ def load_rules_from_excel(path=None, sheet_name=None):
                 continue
 
             raw_height_value = get_cell(row, u"Неприсоединенная высота")
-            height_conditions, height_label = _build_height_conditions(
-                None, raw_height_value
-            )
-            height_min_mm = 0.0
-            height_max_mm = _first_number(raw_height_value, 0.0) or 0.0
+            raw_height_text = (_as_text(raw_height_value) or u"").strip()
+            if raw_height_value is None or not raw_height_text:
+                # Пустое значение высоты в Excel означает отсутствие ограничения.
+                height_conditions = []
+                height_label = u""
+                height_min_mm = None
+                height_max_mm = None
+            else:
+                height_conditions, height_label = _build_height_conditions(
+                    None, raw_height_value
+                )
+                height_min_mm = 0.0
+                height_max_mm = _first_number(raw_height_value, 0.0) or 0.0
 
             if has_stage_column:
                 stage_raw = get_cell(row, u"Стадия")
-                stage = (_as_text(stage_raw) or u"").strip().lower()
+                stage = _normalize_stage_value(stage_raw)
             else:
                 stage = u""
 
-            thickness_mm = 0.0
+            thickness_mm = None
             for header in thickness_headers:
                 if header not in header_map:
                     continue
