@@ -60,6 +60,29 @@ def _normalize_bool_text(value):
     return u"да" if text in {u"да", u"yes", u"1", u"true", u"истина"} else u"нет"
 
 
+def _normalize_brick_size_value(value):
+    """Приводит размеры кирпича к каноническому виду (1нф/1.4нф/2.1нф)."""
+
+    text = (_as_text(value) or u"").replace(u"\xa0", u" ").strip().lower()
+    if not text:
+        return u""
+    text = text.replace(u",", u".")
+    compact = text.replace(u" ", u"")
+    aliases = {
+        u"одинарный": u"1нф",
+        u"1нф": u"1нф",
+        u"1nf": u"1нф",
+        u"утолщенный": u"1.4нф",
+        u"утолщённый": u"1.4нф",
+        u"1.4нф": u"1.4нф",
+        u"1.4nf": u"1.4нф",
+        u"двойной": u"2.1нф",
+        u"2.1нф": u"2.1нф",
+        u"2.1nf": u"2.1нф",
+    }
+    return aliases.get(compact, compact)
+
+
 def _normalize_stage_value(value):
     text = (_as_text(value) or u"").replace(u"\xa0", u" ")
     norm = text.strip().lower()
@@ -448,11 +471,7 @@ def load_rules_from_excel(path=None, sheet_name=None):
                     continue
                 brick_size_raw = get_cell(row, header)
                 break
-            brick_size = (
-                (_as_text(brick_size_raw) or u"")
-                .strip()
-                .lower()
-            )
+            brick_size = _normalize_brick_size_value(brick_size_raw)
 
             extra_filters = {}
             for header in extra_headers:

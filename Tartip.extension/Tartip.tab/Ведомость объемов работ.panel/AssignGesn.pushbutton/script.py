@@ -72,6 +72,29 @@ def _normalize_bool_text(value):
     return u"да" if text in {u"да", u"yes", u"true", u"1", u"истина"} else u"нет"
 
 
+def _normalize_brick_size(value):
+    """Нормализует размеры кирпича (одинарный/утолщённый/двойной ↔ 1НФ/1.4НФ/2.1НФ)."""
+
+    text = (_t(value) or u"").replace(u"\xa0", u" ").strip().lower()
+    if not text:
+        return u""
+    text = text.replace(u",", u".")
+    compact = text.replace(u" ", u"")
+    aliases = {
+        u"одинарный": u"1нф",
+        u"1нф": u"1нф",
+        u"1nf": u"1нф",
+        u"утолщенный": u"1.4нф",
+        u"утолщённый": u"1.4нф",
+        u"1.4нф": u"1.4нф",
+        u"1.4nf": u"1.4нф",
+        u"двойной": u"2.1нф",
+        u"2.1нф": u"2.1нф",
+        u"2.1nf": u"2.1нф",
+    }
+    return aliases.get(compact, compact)
+
+
 def _normalize_stage(value):
     """Приводит значение стадии к единому виду для сопоставления."""
 
@@ -535,8 +558,7 @@ def _process_wall(wall, rules):
     reinf_param = wall.LookupParameter(PARAM_REINFORCEMENT)
     reinforcement_text = _normalize_bool_text(_get_parameter_value(wall, PARAM_REINFORCEMENT)) if reinf_param else u""
     brick_param = wall.LookupParameter(PARAM_BRICK_SIZE)
-    brick_size = _t(_get_parameter_value(wall, PARAM_BRICK_SIZE)) if brick_param else u""
-    brick_size = (brick_size or u"").strip().lower()
+    brick_size = _normalize_brick_size(_get_parameter_value(wall, PARAM_BRICK_SIZE)) if brick_param else u""
     stage_text, stage_found = _get_stage_value(wall)
 
     input_details = _format_input_details(
