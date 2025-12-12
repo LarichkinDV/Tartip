@@ -241,14 +241,16 @@ def _get_extra_param_text(wall, wall_type, param_name):
 
 
 def _get_extra_actual_values(wall, wall_type, base_name):
-    """Собирает возможные значения доп. ресурса из обеих групп параметров."""
+    """Возвращает одно значение доп. ресурса (приоритет у кодового)."""
 
-    values = set()
-    for name in (base_name, u"Наименование {0}".format(base_name)):
-        val = _get_extra_param_text(wall, wall_type, name)
-        if val:
-            values.add(val)
-    return values
+    code_val = _get_extra_param_text(wall, wall_type, base_name)
+    if code_val:
+        return {code_val}
+
+    name_val = _get_extra_param_text(
+        wall, wall_type, u"Наименование {0}".format(base_name)
+    )
+    return {name_val} if name_val else set()
 
 
 def _match_rules(
