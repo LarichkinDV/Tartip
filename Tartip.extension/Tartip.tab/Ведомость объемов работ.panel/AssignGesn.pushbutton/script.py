@@ -291,8 +291,6 @@ def _match_rules(
 
 def _explain_no_match(
     rules,
-    wall=None,
-    wall_type=None,
     family_name,
     type_name,
     thickness_mm,
@@ -305,6 +303,8 @@ def _explain_no_match(
     stage_found=True,
     reinf_found=True,
     brick_found=True,
+    wall=None,
+    wall_type=None,
 ):
     """Формирует человекочитаемую причину отсутствия совпадений."""
 
